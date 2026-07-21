@@ -75,9 +75,21 @@ uint8_t my_mcu_send_can(const MsgQRxCan_t *msg_can){ //oodbiór z mcu (can) i wy
 	 if (msg_can->RxHeader.ExtId)
 	   return 0;
 
+ sprintf(s,"can_rx<%X %X %X %X %02X%02X%02X%02X%02X%02X%02X%02X",
+	  				     msg_can->RxHeader.IDE,
+	  						 msg_can->RxHeader.StdId,
+	  						 msg_can->RxHeader.RTR,
+	  						 msg_can->RxHeader.DLC,
+	  						 msg_can->RxData.to, msg_can->RxData.fun, msg_can->RxData.val, msg_can->RxData.valL,
+	  						 msg_can->RxData.xxx[0], msg_can->RxData.xxx[1], msg_can->RxData.xxx[2], msg_can->RxData.xxx[3]);
+ 	log_put(s);
+
+
+
 	//uint32_t id_device = msg_can->RxHeader.StdId - 0x100;
   if (msg_can->RxData.to == 0)
 	   return 0;
+
 
 	uint8_t id = msg_can->RxData.to;
 

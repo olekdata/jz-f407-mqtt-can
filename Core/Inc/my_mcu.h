@@ -15,7 +15,7 @@
 #define topic_switch2 "/switch2"
 #define topic_roleta_pos "/roleta_pos"
 #define topic_sensor1 "/sensor1"
-#define topic_sensor2 "/sensor1"
+#define topic_sensor2 "/sensor2"
 #define topic_prad "/prad"
 #define topic_temp "/temp"
 

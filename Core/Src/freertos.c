@@ -111,26 +111,16 @@ const osThreadAttr_t TaskLCD_attributes = {
 };
 /* Definitions for TaskCan */
 osThreadId_t TaskCanHandle;
-uint32_t TaskCanBuffer[ 1024 ];
-osStaticThreadDef_t TaskCanControlBlock;
 const osThreadAttr_t TaskCan_attributes = {
   .name = "TaskCan",
-  .cb_mem = &TaskCanControlBlock,
-  .cb_size = sizeof(TaskCanControlBlock),
-  .stack_mem = &TaskCanBuffer[0],
-  .stack_size = sizeof(TaskCanBuffer),
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskMQTT */
 osThreadId_t TaskMQTTHandle;
-uint32_t TaskMQTTBuffer[ 1024 ];
-osStaticThreadDef_t TaskMQTTControlBlock;
 const osThreadAttr_t TaskMQTT_attributes = {
   .name = "TaskMQTT",
-  .cb_mem = &TaskMQTTControlBlock,
-  .cb_size = sizeof(TaskMQTTControlBlock),
-  .stack_mem = &TaskMQTTBuffer[0],
-  .stack_size = sizeof(TaskMQTTBuffer),
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal1,
 };
 /* Definitions for QueueRxCan */
@@ -362,6 +352,7 @@ void StartDefaultTask(void *argument)
 /*deb*/
 	{
 	extern struct netif gnetif;
+
 	u32_t local_IP = gnetif.ip_addr.addr;
 	char s[LOG_LEN];
 	sprintf(s, "IP %lu.%lu.%lu.%lu", (local_IP & 0xff), ((local_IP >> 8) & 0xff),
