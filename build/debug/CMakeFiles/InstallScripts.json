@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/l/STM32/DS-CAN/JZ-F407-MQTT-CAN/build/debug/cmake_install.cmake",
+		"D:/l/STM32/DS-CAN/JZ-F407-MQTT-CAN/build/debug/cmake/stm32cubemx/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

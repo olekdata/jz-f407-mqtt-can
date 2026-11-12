@@ -9,13 +9,16 @@
 #include "cmsis_os2.h"
 #include "string.h"
 #include "stats.h"
+#include "stdint.h"
 
 
 char log_items[LOG_MAX][LOG_LEN];
-uint8_t log_item = 0;
+//uint8_t log_item = 0;
+int log_item = 0;
 
 
-uint32_t itime = 0;
+//uint32_t itime = 0;
+int itime = 0;
 char slicz[20];
 char stime[20];
 
@@ -23,7 +26,7 @@ char stime[20];
 extern osSemaphoreId_t BinarySemLCDHandle;
 extern osMutexId_t  logMutexHandle;
 
-int ILinia(uint8_t lp) {
+int ILinia(int lp) { //uint8_t lp) {
 	return (log_item + lp) % LOG_MAX;
 }
 

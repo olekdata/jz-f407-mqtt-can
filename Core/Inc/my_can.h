@@ -36,6 +36,8 @@ typedef struct  {
 
 void CanConfig(void);
 void Can_RX(const MsgQRxCan_t *msg_can);
+void my_can_Tx_Queue(const MsgQTxCan_t *msg);
+void my_can_Tx(const MsgQTxCan_t *msg);
 
 
 #endif /* INC_MY_CAN_H_ */

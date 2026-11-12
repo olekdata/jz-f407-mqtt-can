@@ -25,6 +25,7 @@
 /* USER CODE BEGIN Includes */
 
 #include "FreeRTOS.h"
+#include <stdio.h>
 
 /* USER CODE END Includes */
 

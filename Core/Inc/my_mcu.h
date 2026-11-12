@@ -8,6 +8,13 @@
 #ifndef INC_MY_MCU_H_
 #define INC_MY_MCU_H_
 
+#include "my_can.h"
+#include "lwip/arch.h"
+
+uint8_t my_mcu_send_can(const MsgQRxCan_t *msg_can);
+void my_mcu_recive_mqtt_topic(const char *topic);
+void my_mcu_recive_mqtt_data(const u8_t *data, u16_t len);
+
 #define topic_root "DataSoft"
 #define topic_can  "DataSoft/can"
 #define topic_roleta  "/roleta"
@@ -15,7 +22,7 @@
 #define topic_switch2 "/switch2"
 #define topic_roleta_pos "/roleta_pos"
 #define topic_sensor1 "/sensor1"
-#define topic_sensor2 "/sensor1"
+#define topic_sensor2 "/sensor2"
 #define topic_prad "/prad"
 #define topic_temp "/temp"
 

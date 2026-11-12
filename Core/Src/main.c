@@ -48,13 +48,13 @@
 #include "iwdg.h"
 #include "lwip.h"
 #include "usart.h"
-#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "usbd_cdc_if.h"
+#include "my_log.h"
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -89,41 +89,21 @@ void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN 0 */
 
 
-// Zeby otwierał się USB wirtual com
-// https://stackoverflow.com/questions/56490843/what-is-issue-with-stm32-virtual-com-port-i-can-not-open-it
-
-/*
-void send_char(char c)
-{
-	HAL_UART_Transmit(&huart3, (uint8_t*)&c, 1, 1000);
-}
-
-
-int __io_putchar(int c)
-{
-	send_char(c);
-	return c;
-}
-*/
-
-/*
-int __io_putchar(int ch)
-{
-   CDC_Transmit_FS(ch,  1);
-	 return ch;
-}
-*/
-
 int _write(int file,char *ptr, int len)
 {
-	int DataIdx;
-  CDC_Transmit_FS(ptr,  len);
-	for(DataIdx= 0; DataIdx< len; DataIdx++)
-	{
-   //__io_putchar(*ptr++);
-		ITM_SendChar(*ptr++);
-	}
-	return len;
+  (void)file;
+
+  if (len <= 0)
+  {
+    return len;
+  }
+
+  if (HAL_UART_Transmit(&huart1, (uint8_t *)ptr, (uint16_t)len, 1000U) != HAL_OK)
+  {
+    return -1;
+  }
+
+  return len;
 }
 
 
@@ -135,6 +115,7 @@ int _write(int file,char *ptr, int len)
   */
 int main(void)
 {
+
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -159,7 +140,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART3_UART_Init();
+  MX_USART1_UART_Init();
   MX_CAN1_Init();
   MX_I2C2_Init();
   MX_IWDG_Init();
@@ -168,13 +149,14 @@ int main(void)
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();  /* Call init function for freertos objects (in freertos.c) */
+  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();
 
   /* Start scheduler */
   osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
@@ -196,6 +178,11 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
@@ -205,10 +192,10 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 13;
-  RCC_OscInitStruct.PLL.PLLN = 195;
+  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 5;
+  RCC_OscInitStruct.PLL.PLLQ = 7;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -223,7 +210,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
   {
     Error_Handler();
   }
@@ -281,7 +268,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* USER CODE BEGIN Callback 0 */
 
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM1) {
+  if (htim->Instance == TIM1)
+  {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
@@ -306,8 +294,7 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.

@@ -32,16 +32,13 @@
 
 /* USER CODE END 0 */
 /* Private function prototypes -----------------------------------------------*/
+static void ethernet_link_status_updated(struct netif *netif);
 /* ETH Variables initialization ----------------------------------------------*/
 void Error_Handler(void);
 
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */
-/* Semaphore to signal Ethernet Link state update */
-osSemaphoreId Netif_LinkSemaphore = NULL;
-/* Ethernet link thread Argument */
-struct link_str link_arg;
 
 /* Variables Initialization */
 struct netif gnetif;
@@ -69,7 +66,7 @@ void MX_LWIP_Init(void)
   IP_ADDRESS[0] = 192;
   IP_ADDRESS[1] = 168;
   IP_ADDRESS[2] = 1;
-  IP_ADDRESS[3] = 101;
+  IP_ADDRESS[3] = 201;
   NETMASK_ADDRESS[0] = 255;
   NETMASK_ADDRESS[1] = 255;
   NETMASK_ADDRESS[2] = 255;
@@ -82,7 +79,7 @@ void MX_LWIP_Init(void)
 /* USER CODE BEGIN IP_ADDRESSES */
 /* USER CODE END IP_ADDRESSES */
 
-  /* Initilialize the LwIP stack with RTOS */
+  /* Initialize the LwIP stack with RTOS */
   tcpip_init( NULL, NULL );
 
   /* IP addresses initialization without DHCP (IPv4) */
@@ -96,33 +93,20 @@ void MX_LWIP_Init(void)
   /* Registers the default network interface */
   netif_set_default(&gnetif);
 
-  if (netif_is_link_up(&gnetif))
-  {
-    /* When the netif is fully configured this function must be called */
-    netif_set_up(&gnetif);
-  }
-  else
-  {
-    /* When the netif link is down this function must be called */
-    netif_set_down(&gnetif);
-  }
+  /* We must always bring the network interface up connection or not... */
+  netif_set_up(&gnetif);
 
   /* Set the link callback function, this function is called on change of link status*/
-  netif_set_link_callback(&gnetif, ethernetif_update_config);
+  netif_set_link_callback(&gnetif, ethernet_link_status_updated);
 
-  /* create a binary semaphore used for informing ethernetif of frame reception */
-  Netif_LinkSemaphore = osSemaphoreNew(1, 1, NULL);
-
-  link_arg.netif = &gnetif;
-  link_arg.semaphore = Netif_LinkSemaphore;
   /* Create the Ethernet link handler thread */
-/* USER CODE BEGIN OS_THREAD_NEW_CMSIS_RTOS_V2 */
+/* USER CODE BEGIN H7_OS_THREAD_NEW_CMSIS_RTOS_V2 */
   memset(&attributes, 0x0, sizeof(osThreadAttr_t));
-  attributes.name = "LinkThr";
+  attributes.name = "EthLink";
   attributes.stack_size = INTERFACE_THREAD_STACK_SIZE;
   attributes.priority = osPriorityBelowNormal;
-  osThreadNew(ethernetif_set_link, &link_arg, &attributes);
-/* USER CODE END OS_THREAD_NEW_CMSIS_RTOS_V2 */
+  osThreadNew(ethernet_link_thread, &gnetif, &attributes);
+/* USER CODE END H7_OS_THREAD_NEW_CMSIS_RTOS_V2 */
 
 /* USER CODE BEGIN 3 */
 
@@ -135,6 +119,25 @@ void MX_LWIP_Init(void)
 /* USER CODE BEGIN 4 */
 /* USER CODE END 4 */
 #endif
+
+/**
+  * @brief  Notify the User about the network interface config status
+  * @param  netif: the network interface
+  * @retval None
+  */
+static void ethernet_link_status_updated(struct netif *netif)
+{
+  if (netif_is_up(netif))
+  {
+/* USER CODE BEGIN 5 */
+/* USER CODE END 5 */
+  }
+  else /* netif is down */
+  {
+/* USER CODE BEGIN 6 */
+/* USER CODE END 6 */
+  }
+}
 
 #if defined ( __CC_ARM )  /* MDK ARM Compiler */
 /**

@@ -11,6 +11,7 @@
 #include "cmsis_os2.h"
 #include "my_log.h"
 #include "my_mcu.h"
+#include "my_reku.h"
 
 
 extern osMessageQueueId_t QueueTxMqttHandle;
@@ -20,7 +21,8 @@ extern osMutexId_t putMqttMutexHandle;
 
 //mqtt_msg__t mqtt_msg;
 
-mqtt_client_t mqtt_client;
+mqtt_client_t *mqtt_client;
+uint8_t data_incoming = 0;
 
 static void mqtt_sub_request_cb(void *arg, err_t result)
 {
@@ -39,7 +41,17 @@ static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len
 //  char s[LOG_LEN];
 //  printf("in: %s %u\n", topic, (unsigned int)tot_len);
 //  log_put(s);
-	my_mcu_recive_mqtt_topic(topic);
+	data_incoming = 0;
+	if (strstr(topic, "can/") != NULL) {
+		data_incoming = 1;
+		my_mcu_recive_mqtt_topic(topic);
+		return;
+	}
+	if (strstr(topic, "rekuperator/") != NULL) {
+		data_incoming = 2;
+		recuperator_recive_mqtt_topic(topic);
+		return;
+  }
 }
 
 
@@ -60,7 +72,14 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
 
 	if(flags & MQTT_DATA_FLAG_LAST) {
 
-		my_mcu_recive_mqtt_data(data, len);
+		if (data_incoming == 1) {
+			 my_mcu_recive_mqtt_data(data, len);
+			 return;
+		}
+		if (data_incoming == 2) {
+			 recuperator_recive_mqtt_data(data, len);
+			 return;
+		}
 
 	}
 }
@@ -82,9 +101,11 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
     char t[TOPIC_LEN];
 
     strcpy(t, topic_can);
-
     strcat(t,"/#");
+    err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
 
+    sprintf(t,"DataSoft/rekuperator/set/#");
+//    sprintf(t,"DataSoft/#");
     err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
 
     if(err != ERR_OK) {
@@ -92,12 +113,44 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
 	  	sprintf(s, "sub err %d", err);
       log_put(s);
     }
-    } else {
-      log_put("sub OK");
+/*
+    sprintf(t,"DataSoft/rekuperator/set/#");
 
-    /* Its more nice to be connected, so try to reconnect */
+    err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
+
+		if(err != ERR_OK) {
+			char s[LOG_LEN];
+			sprintf(s, "sub2 err %d", err);
+			log_put(s);
+		} else
+      log_put("sub2 ok");
+*/
+
+
+    } else {
+      log_put("reconnect");
       my_mqtt_do_connect(client);
     }
+/*
+    sprintf(t,"DataSoft/rekuperator/set/#");
+
+    err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
+
+		if(err != ERR_OK) {
+			char s[LOG_LEN];
+			sprintf(s, "sub2 err %d", err);
+			log_put(s);
+		} else {
+			log_put("sub OK");
+    }
+*/
+//  } else {
+//    /* Its more nice to be connected, so try to reconnect */
+//  	//osDelay(100);
+//		log_put("Re connect");
+//    my_mqtt_do_connect(client);
+//  }
+
 }
 
 
@@ -175,8 +228,11 @@ void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m)
   err = mqtt_publish(client, topic, m, ml, qos, retain, mqtt_pub_request_cb, 0);
   if(err != ERR_OK) {
 	  char s[LOG_LEN];
-    sprintf(s, "Pub. err: %d (%d+%d)", err, tl, ml); 	log_put(s);
-    sprintf(s, "Title>%s<", t); 			log_put(s);
+	    sprintf(s, "Pub. err: %d (%s)", err, t); 	log_put(s);
+//	  uint8_t l = tl - MIN(tl,10);
+//    sprintf(s, "Pub. err: %d (%s)", err, &t+l); 	log_put(s);
+//    sprintf(s, "Pub. err: %d (%d+%d)", err, tl, ml); 	log_put(s);
+//    sprintf(s, "Title>%s<", t); 			log_put(s);
 //    sprintf(s, "Msg>%s<", m);   			log_put(s);
 //    Error_Handler();
 //    osDelay(1000);
@@ -204,4 +260,3 @@ void my_mqtt_to_Queue(const char *t, const char *m){
 	}
 	osMutexRelease(putMqttMutexHandle);
 }
-

@@ -8,8 +8,6 @@
 #ifndef INC_MY_MQTT_H_
 #define INC_MY_MQTT_H_
 
-#define MQTT_OUTPUT_RINGBUF_SIZE 2048 // systemowa LWIP
-
 #include "mqtt.h"
 
 
@@ -24,7 +22,7 @@ typedef struct {
 //extern mqtt_msg__t mqtt_msg;
 
 
-extern mqtt_client_t mqtt_client;
+extern mqtt_client_t *mqtt_client;
 
 void my_mqtt_do_connect(mqtt_client_t *client);
 void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m);

@@ -26,7 +26,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "stm32f2xx_hal.h"
+#include "stm32f4xx_hal.h"
 #include "stdio.h"
 #include "my_log.h"
 #include "my_can.h"
@@ -46,8 +46,6 @@
 /* Private typedef -----------------------------------------------------------*/
 typedef StaticTask_t osStaticThreadDef_t;
 typedef StaticQueue_t osStaticMessageQDef_t;
-typedef StaticSemaphore_t osStaticMutexDef_t;
-typedef StaticSemaphore_t osStaticSemaphoreDef_t;
 /* USER CODE BEGIN PTD */
 
 // ostatnia zajeta komorka FLASH w Buider Analizer to impure_data 0x0801ed98  96 bajtów (0x60)  = 1 EDF8
@@ -111,26 +109,16 @@ const osThreadAttr_t TaskLCD_attributes = {
 };
 /* Definitions for TaskCan */
 osThreadId_t TaskCanHandle;
-uint32_t TaskCanBuffer[ 1024 ];
-osStaticThreadDef_t TaskCanControlBlock;
 const osThreadAttr_t TaskCan_attributes = {
   .name = "TaskCan",
-  .cb_mem = &TaskCanControlBlock,
-  .cb_size = sizeof(TaskCanControlBlock),
-  .stack_mem = &TaskCanBuffer[0],
-  .stack_size = sizeof(TaskCanBuffer),
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskMQTT */
 osThreadId_t TaskMQTTHandle;
-uint32_t TaskMQTTBuffer[ 1024 ];
-osStaticThreadDef_t TaskMQTTControlBlock;
 const osThreadAttr_t TaskMQTT_attributes = {
   .name = "TaskMQTT",
-  .cb_mem = &TaskMQTTControlBlock,
-  .cb_size = sizeof(TaskMQTTControlBlock),
-  .stack_mem = &TaskMQTTBuffer[0],
-  .stack_size = sizeof(TaskMQTTBuffer),
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal1,
 };
 /* Definitions for QueueRxCan */
@@ -168,35 +156,23 @@ const osMessageQueueAttr_t QueueTxCan_attributes = {
 };
 /* Definitions for logMutex */
 osMutexId_t logMutexHandle;
-osStaticMutexDef_t logMutexControlBlock;
 const osMutexAttr_t logMutex_attributes = {
-  .name = "logMutex",
-  .cb_mem = &logMutexControlBlock,
-  .cb_size = sizeof(logMutexControlBlock),
+  .name = "logMutex"
 };
 /* Definitions for putMqttMutex */
 osMutexId_t putMqttMutexHandle;
-osStaticMutexDef_t putMqttMutexControlBlock;
 const osMutexAttr_t putMqttMutex_attributes = {
-  .name = "putMqttMutex",
-  .cb_mem = &putMqttMutexControlBlock,
-  .cb_size = sizeof(putMqttMutexControlBlock),
+  .name = "putMqttMutex"
 };
 /* Definitions for BinarySemButton */
 osSemaphoreId_t BinarySemButtonHandle;
-osStaticSemaphoreDef_t BinarySemButtonControlBlock;
 const osSemaphoreAttr_t BinarySemButton_attributes = {
-  .name = "BinarySemButton",
-  .cb_mem = &BinarySemButtonControlBlock,
-  .cb_size = sizeof(BinarySemButtonControlBlock),
+  .name = "BinarySemButton"
 };
 /* Definitions for BinarySemLCD */
 osSemaphoreId_t BinarySemLCDHandle;
-osStaticSemaphoreDef_t BinarySemLCDControlBlock;
 const osSemaphoreAttr_t BinarySemLCD_attributes = {
-  .name = "BinarySemLCD",
-  .cb_mem = &BinarySemLCDControlBlock,
-  .cb_size = sizeof(BinarySemLCDControlBlock),
+  .name = "BinarySemLCD"
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -211,7 +187,16 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 	MsgQRxCan_t msg_can;
 	osStatus_t status;
-	HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &msg_can.RxHeader, &msg_can.RxData);
+	uint8_t data[8] = {0};
+	_Static_assert(sizeof(msg_can.RxData) == sizeof(data), "CAN payload must be 8 bytes");
+	HAL_StatusTypeDef rx_status = HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &msg_can.RxHeader, data);
+	if (rx_status != HAL_OK) {
+		char s[LOG_LEN];
+		sprintf(s, "CAN RX err %d\n", rx_status);
+		log_put(s);
+		return;
+	}
+	memcpy(&msg_can.RxData, data, sizeof(data));
 	status = osMessageQueuePut(QueueRxCanHandle, &msg_can, 0U, 0U);
 	if (status != osOK) {
 		 char s[LOG_LEN];
@@ -229,7 +214,6 @@ void StartTaskCan(void *argument);
 void StartTaskMQTT(void *argument);
 
 extern void MX_LWIP_Init(void);
-extern void MX_USB_DEVICE_Init(void);
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /* Hook prototypes */
@@ -281,10 +265,10 @@ void MX_FREERTOS_Init(void) {
 
   /* Create the semaphores(s) */
   /* creation of BinarySemButton */
-  BinarySemButtonHandle = osSemaphoreNew(1, 1, &BinarySemButton_attributes);
+  BinarySemButtonHandle = osSemaphoreNew(1, 0, &BinarySemButton_attributes);
 
   /* creation of BinarySemLCD */
-  BinarySemLCDHandle = osSemaphoreNew(1, 1, &BinarySemLCD_attributes);
+  BinarySemLCDHandle = osSemaphoreNew(1, 0, &BinarySemLCD_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
 	/* add semaphores, ... */
@@ -345,9 +329,6 @@ void StartDefaultTask(void *argument)
 {
   /* init code for LWIP */
   MX_LWIP_Init();
-
-  /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
 	/* Infinite loop */
 
@@ -362,6 +343,7 @@ void StartDefaultTask(void *argument)
 /*deb*/
 	{
 	extern struct netif gnetif;
+
 	u32_t local_IP = gnetif.ip_addr.addr;
 	char s[LOG_LEN];
 	sprintf(s, "IP %lu.%lu.%lu.%lu", (local_IP & 0xff), ((local_IP >> 8) & 0xff),
@@ -518,18 +500,26 @@ void StartTaskMQTT(void *argument)
 		osDelay(10);
 	}
 
-	my_mqtt_do_connect(&mqtt_client);
+	mqtt_client = mqtt_client_new();
+	if (mqtt_client == NULL) {
+		log_put("MQTT client allocation failed");
+		for (;;) {
+			osDelay(1000);
+		}
+	}
+
+	my_mqtt_do_connect(mqtt_client);
 
   /* Infinite loop */
   for(;;)
   {
-  	if (mqtt_client_is_connected(&mqtt_client)){
+    if (mqtt_client_is_connected(mqtt_client)){
   		osStatus_t status;
   		mqtt_msg__t mqtt_msg;
 
 			status = osMessageQueueGet(QueueTxMqttHandle, &mqtt_msg, NULL, 0U); // wait for message
 			if (status == osOK)
-				my_mqtt_publish(&mqtt_client, mqtt_msg.topic, mqtt_msg.value);
+				my_mqtt_publish(mqtt_client, mqtt_msg.topic, mqtt_msg.value);
 		} else {
 //			log_put("mqtt not cone.");
  // 		my_mqtt_do_connect(&mqtt_client);

@@ -11,17 +11,27 @@
 #define LOG_MAX 7
 #define LOG_LEN 70
 
+#ifndef MIN
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#endif
+#ifndef MAX
+#define MAX(a,b) (((a)>(b))?(a):(b))
+#endif
+
 #include "stdio.h"
 
 
 extern char log_items[LOG_MAX][LOG_LEN];
-extern uint8_t log_item;
+//extern uint8_t log_item;
+extern int log_item;
 
-extern uint32_t itime;
+//extern uint32_t itime;
+extern int itime;
 extern char stime[20];
 extern char slicz[20];
 
-int ILinia(uint8_t lp);
+//int ILinia(uint8_t lp);
+int ILinia(int lp);
 void log_put(const char *s);
 void set_stime();
 
