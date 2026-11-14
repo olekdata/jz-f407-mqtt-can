@@ -6,7 +6,7 @@ Głównym celem jest zdalna aktualizacja firmware’u docelowego MCU przez CAN (
 
 Nowa funkcja musi zachować kompatybilność ze starszą komunikacją CAN: istniejące identyfikatory, formaty ramek, znaczenie payloadów i zachowanie dotychczasowych poleceń pozostają niezmienione. NUCLEO F207 jest punktem odniesienia dla tego protokołu, a nie miejscem implementacji OTA.
 
-Mapa pinów i interfejsów płytki znajduje się w [JZ-STM32F407.MD](./JZ-STM32F407.MD), opracowanym na podstawie [schematu](./DOC/Schematic_STM32F407VET6.pdf).
+Mapa pinów i interfejsów płytki znajduje się w [JZ-F407.MD](./JZ-F407.MD), opracowanym na podstawie [schematu](./DOC/Schematic_STM32F407VET6.pdf).
 
 ## Stan implementacji
 
@@ -43,7 +43,7 @@ Firmware używa statycznej konfiguracji IPv4:
 
 | Ustawienie | Wartość domyślna |
 |---|---|
-| Adres urządzenia | `192.168.1.201` |
+| Adres urządzenia | `192.168.1.249` |
 | Maska | `255.255.255.0` |
 | Brama | `192.168.1.1` |
 | Broker MQTT | `192.168.1.2:1883` |
@@ -52,6 +52,35 @@ Firmware używa statycznej konfiguracji IPv4:
 Przed uruchomieniem sprawdź, czy adres urządzenia nie jest zajęty i czy broker jest osiągalny z tej samej sieci. DHCP jest wyłączone. Adres IP urządzenia zmienia się w `LWIP/App/lwip.c`, a adres brokera w `Core/Src/my_mqtt.c`. Po zmianie konfiguracji przebuduj i wgraj firmware.
 
 ## Generowanie kodu F407 i budowanie
+
+### Diody LED
+
+- LED1 / PE13 zmienia stan co sekundę jako bicie serca głównego zadania.
+  Miganie nie potwierdza stanu Ethernetu ani HTTP.
+- LED2 / PE14 i LED3 / PE15 są sterowane wyłącznie przez formularz WWW.
+  Pierwsze pole (`led=1`) steruje LED3, drugie (`led=2`) LED2.
+  Zaznaczenie pola i wysłanie formularza zapala diodę, odznaczenie gasi.
+- Zgodnie ze schematem płytki diody są aktywne stanem niskim:
+  `GPIO_PIN_RESET` zapala, a `GPIO_PIN_SET` gasi.
+
+Tymczasowa diagnostyka nasłuchu/łącza/SSI diodami została usunięta.
+CAN, MQTT, LCD i zadanie przycisku pozostają wyłączone.
+
+### Konfiguracja buforów Ethernet dla WWW
+
+W `LWIP/Target/lwipopts.h` ustawiono `LWIP_NETIF_TX_SINGLE_PBUF=1`:
+LwIP składa dane TCP w pojedyncze bufory RAM przed przekazaniem do Ethernetu.
+Sterownik odrzuca pakiety z więcej niż czterema buforami, a nagłówki HTTP
+i treść strony mogą przekroczyć ten limit przy wysyłaniu bez kopiowania.
+Opcja zwiększa koszt kopiowania i użycie RAM, ale nie zmienia protokołu ani
+treści strony.
+`LWIP_SUPPORT_CUSTOM_PBUF=1` zachowuje obsługę własnych buforów odbiorczych
+sterownika Ethernet, niezależnie od ustawienia pojedynczego bufora TX.
+Po wgraniu tej konfiguracji na JZ-F407 potwierdzono w dwóch kolejnych seriach
+pełne odpowiedzi HTTP 200 dla `/` i `/index.shtml` oraz HTTP 404 dla `/404.html`.
+Ping 4/4 również przeszedł. Testowy serwer TCP echo został usunięty;
+firmware nie uruchamia nasłuchu na porcie 2323. CAN i MQTT pozostają
+wyłączone.
 
 Konfiguracja projektu wskazuje F407, ale wygenerowany kod nie został jeszcze zweryfikowany. Nie wgrywaj dotychczasowych artefaktów z katalogu `Debug` na płytkę F407.
 
@@ -164,7 +193,7 @@ Obsługiwane wartości payloadu to `0`–`3`.
 
 ## Interfejs WWW i diagnostyka
 
-Po podłączeniu do tej samej sieci otwórz `http://192.168.1.201/`. Strona pozwala sterować dwiema diodami LED i wyświetla wpisy logu. Log jest również dostępny przez USB CDC oraz wyjście debuggera.
+Po podłączeniu do tej samej sieci otwórz `http://192.168.1.249/`. Strona pozwala sterować dwiema diodami LED i wyświetla wpisy logu. Log jest również dostępny przez USB CDC oraz wyjście debuggera.
 
 ## Struktura projektu
 

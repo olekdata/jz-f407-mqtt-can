@@ -35,6 +35,10 @@
 #define MQTT_DEBUG                  LWIP_DBG_ON
 #define MQTT_OUTPUT_RINGBUF_SIZE 2048
 #define HTTPD_USE_CUSTOM_FSDATA 1
+/* ETH TX supports only four buffers; HTTP headers can exceed that limit. */
+#define LWIP_NETIF_TX_SINGLE_PBUF 1
+/* Keep custom RX buffers enabled independently of the TX setting. */
+#define LWIP_SUPPORT_CUSTOM_PBUF 1
 
 /* USER CODE END 0 */
 

@@ -39,6 +39,7 @@
 
 #include "ssd1306.h"
 #include "netif.h"
+#include "lwip/tcpip.h"
 #include "string.h"
 
 /* USER CODE END Includes */
@@ -205,6 +206,14 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 	}
 }
 
+static void StartHttpServer(void *argument)
+{
+	(void)argument;
+	httpd_init();
+	myCGIinit();
+	mySSIinit();
+}
+
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -296,17 +305,11 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* creation of TaskButton */
-  TaskButtonHandle = osThreadNew(StartTaskButton, NULL, &TaskButton_attributes);
-
-  /* creation of TaskLCD */
-  TaskLCDHandle = osThreadNew(StartTaskLCD, NULL, &TaskLCD_attributes);
-
-  /* creation of TaskCan */
-  TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
-
-  /* creation of TaskMQTT */
-  TaskMQTTHandle = osThreadNew(StartTaskMQTT, NULL, &TaskMQTT_attributes);
+  /* Web-only test: keep application tasks stopped. */
+  // TaskButtonHandle = osThreadNew(StartTaskButton, NULL, &TaskButton_attributes);
+  // TaskLCDHandle = osThreadNew(StartTaskLCD, NULL, &TaskLCD_attributes);
+  // TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
+  // TaskMQTTHandle = osThreadNew(StartTaskMQTT, NULL, &TaskMQTT_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
 	/* add threads, ... */
@@ -332,9 +335,17 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN StartDefaultTask */
 	/* Infinite loop */
 
-	httpd_init();
-	myCGIinit();
-	mySSIinit();
+	err_t http_start_status;
+	do {
+		http_start_status = tcpip_callback(StartHttpServer, NULL);
+		if (http_start_status != ERR_OK) {
+			char s[LOG_LEN];
+			sprintf(s, "HTTP init queue err %d", http_start_status);
+			log_put(s);
+			HAL_IWDG_Refresh(&hiwdg);
+			osDelay(100);
+		}
+	} while (http_start_status != ERR_OK);
 
 	osDelay(1000);
   LWIP_Init_flag = 1;
@@ -355,16 +366,9 @@ void StartDefaultTask(void *argument)
 
 //	stats_display();
 
-
 	for (;;) {
 		HAL_GPIO_TogglePin(LD1_GPIO_Port, LD1_Pin);
-		set_stime();
-/*deb*/
-   my_mqtt_to_Queue("stm32/licz", slicz);
-   my_mqtt_to_Queue("stm32/czas", stime);
-/**/
-		log_put("");
-
+		/* Keep the watchdog serviced while HTTP/LwIP run. */
 		HAL_IWDG_Refresh(&hiwdg);
 		osDelay(1000);
 	}

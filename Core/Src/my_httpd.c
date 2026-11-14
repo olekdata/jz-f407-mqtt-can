@@ -10,7 +10,6 @@
 #include "lwip/apps/httpd.h"
 #include "my_log.h"
 
-
 bool LD1ON = false; // this variable will indicate if the LD3 LED on the board is ON or not
 bool LD2ON = false; // this variable will indicate if our LD2 LED on the board is ON or not
 
@@ -40,10 +39,10 @@ const char* LedCGIhandler(int iIndex, int iNumParams, char *pcParam[],
 	uint32_t i = 0;
 	if (iIndex == 0) {
 		//turning the LED lights off
-		HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
 		// we put this variable to false to indicate that the LD2 LED on the board is not ON
 		LD2ON = false;
-		HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_SET);
 		// we put this variable to false to indicate that the LD* LED on the board is not ON
 		LD1ON = false;
 		//mqtt_my_publish(&mqtt_client, "Led1", (char)LD1ON);
@@ -51,11 +50,11 @@ const char* LedCGIhandler(int iIndex, int iNumParams, char *pcParam[],
 	for (i = 0; i < iNumParams; i++) {
 		if (strcmp(pcParam[i], "led") == 0) {
 			if (strcmp(pcValue[i], "1") == 0) {
-				HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_RESET);
 				// LD3 LED (red) on the board is ON!
 				LD1ON = true;
 			} else if (strcmp(pcValue[i], "2") == 0) {
-				HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 				// LD2 LED (blue) on the board is ON!
 				LD2ON = true;
 			}
