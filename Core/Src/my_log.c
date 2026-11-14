@@ -33,6 +33,7 @@ int ILinia(int lp) { //uint8_t lp) {
 void log_put(const char *s) {
 
 	osMutexAcquire(logMutexHandle, osWaitForever);
+	set_stime();
 	char sl[LOG_LEN];
 	if (s[0] == 0) {
 		sprintf(sl, "+%s\n", stime);

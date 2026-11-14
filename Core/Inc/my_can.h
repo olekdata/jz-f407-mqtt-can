@@ -34,7 +34,8 @@ typedef struct  {
 	CanData_t TxData;							// 4 x uint8_t = 4
 } MsgQTxCan_t;									// size = 25 bajty
 
-void CanConfig(void);
+HAL_StatusTypeDef CanConfig(void);
+void Can_LogRx(const MsgQRxCan_t *msg_can);
 void Can_RX(const MsgQRxCan_t *msg_can);
 void my_can_Tx_Queue(const MsgQTxCan_t *msg);
 void my_can_Tx(const MsgQTxCan_t *msg);

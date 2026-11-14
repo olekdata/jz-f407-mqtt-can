@@ -22,7 +22,7 @@ extern osMessageQueueId_t QueueTxCanHandle;
 //MsgQRxCan_t msg_can;
 
 
-void CanConfig(void) {
+HAL_StatusTypeDef CanConfig(void) {
     // Inicjacja magistrali CAN
       /*Na podstawie kodu z materiału https://www.youtube.com/watch?v=ymD3F0h-ilE&t=924s */
 
@@ -38,9 +38,62 @@ void CanConfig(void) {
     Can_FilterConfig.SlaveStartFilterBank = 14;
     Can_FilterConfig.FilterBank = 0;
 
-    HAL_CAN_ConfigFilter(&hcan1, &Can_FilterConfig);
-    HAL_CAN_Start(&hcan1);
-    HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
+    char s[LOG_LEN - 12];
+    HAL_StatusTypeDef status = HAL_CAN_ConfigFilter(&hcan1, &Can_FilterConfig);
+    if (status != HAL_OK) {
+        snprintf(s, sizeof(s), "CAN1 filter err %u HAL=%08lX",
+                 (unsigned int)status, (unsigned long)HAL_CAN_GetError(&hcan1));
+        log_put(s);
+        return status;
+    }
+    log_put("CAN1 filter FIFO0 accept all OK");
+
+    status = HAL_CAN_Start(&hcan1);
+    if (status != HAL_OK) {
+        snprintf(s, sizeof(s), "CAN1 start err %u HAL=%08lX",
+                 (unsigned int)status, (unsigned long)HAL_CAN_GetError(&hcan1));
+        log_put(s);
+        return status;
+    }
+    log_put("CAN1 start OK");
+
+    status = HAL_CAN_ActivateNotification(&hcan1,
+             CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO0_OVERRUN);
+    if (status != HAL_OK) {
+        snprintf(s, sizeof(s), "CAN1 RX IRQ err %u HAL=%08lX",
+                 (unsigned int)status, (unsigned long)HAL_CAN_GetError(&hcan1));
+        log_put(s);
+        return status;
+    }
+    log_put("CAN1 RX IRQ OK");
+    return HAL_OK;
+}
+
+void Can_LogRx(const MsgQRxCan_t *msg_can) {
+    char s[LOG_LEN - 12];
+    if (msg_can->RxHeader.DLC > 8U) {
+        snprintf(s, sizeof(s), "CAN RX invalid DLC=%lu",
+                 (unsigned long)msg_can->RxHeader.DLC);
+        log_put(s);
+        return;
+    }
+
+    uint32_t id = msg_can->RxHeader.IDE == CAN_ID_EXT ?
+                  msg_can->RxHeader.ExtId : msg_can->RxHeader.StdId;
+    int len = snprintf(s, sizeof(s), "CAN RX %c:%08lX %s L=%lu",
+                       msg_can->RxHeader.IDE == CAN_ID_EXT ? 'E' : 'S',
+                       (unsigned long)id,
+                       msg_can->RxHeader.RTR == CAN_RTR_REMOTE ? "RTR" : "DATA",
+                       (unsigned long)msg_can->RxHeader.DLC);
+    if (msg_can->RxHeader.RTR == CAN_RTR_DATA) {
+        uint8_t data[8];
+        memcpy(data, &msg_can->RxData, sizeof(data));
+        for (uint32_t i = 0; i < msg_can->RxHeader.DLC; i++) {
+            len += snprintf(s + len, sizeof(s) - (size_t)len,
+                            i == 0U ? " %02X" : "%02X", data[i]);
+        }
+    }
+    log_put(s);
 }
 
 

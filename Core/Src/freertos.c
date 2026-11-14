@@ -70,7 +70,9 @@ uint8_t LWIP_Init_flag = 0;
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+static volatile uint32_t can_rx_read_errors;
+static volatile uint32_t can_rx_queue_drops;
+_Static_assert(sizeof(MsgQRxCan_t) == 36U, "Update CubeMX CAN RX queue item size");
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -124,7 +126,7 @@ const osThreadAttr_t TaskMQTT_attributes = {
 };
 /* Definitions for QueueRxCan */
 osMessageQueueId_t QueueRxCanHandle;
-uint8_t QueueRxCanBuffer[ 32 * 32 ];
+uint8_t QueueRxCanBuffer[ 32 * 36 ];
 osStaticMessageQDef_t QueueRxCanControlBlock;
 const osMessageQueueAttr_t QueueRxCan_attributes = {
   .name = "QueueRxCan",
@@ -192,17 +194,13 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
 	_Static_assert(sizeof(msg_can.RxData) == sizeof(data), "CAN payload must be 8 bytes");
 	HAL_StatusTypeDef rx_status = HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &msg_can.RxHeader, data);
 	if (rx_status != HAL_OK) {
-		char s[LOG_LEN];
-		sprintf(s, "CAN RX err %d\n", rx_status);
-		log_put(s);
+		can_rx_read_errors++;
 		return;
 	}
 	memcpy(&msg_can.RxData, data, sizeof(data));
 	status = osMessageQueuePut(QueueRxCanHandle, &msg_can, 0U, 0U);
 	if (status != osOK) {
-		 char s[LOG_LEN];
-		 sprintf(s, "QPut can err %d\n", status);
-		 log_put(s);
+		can_rx_queue_drops++;
 	}
 }
 
@@ -289,7 +287,7 @@ void MX_FREERTOS_Init(void) {
 
   /* Create the queue(s) */
   /* creation of QueueRxCan */
-  QueueRxCanHandle = osMessageQueueNew (32, 32, &QueueRxCan_attributes);
+  QueueRxCanHandle = osMessageQueueNew (32, 36, &QueueRxCan_attributes);
 
   /* creation of QueueTxMqtt */
   QueueTxMqttHandle = osMessageQueueNew (16, 100, &QueueTxMqtt_attributes);
@@ -298,21 +296,26 @@ void MX_FREERTOS_Init(void) {
   QueueTxCanHandle = osMessageQueueNew (32, 32, &QueueTxCan_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
-	/* add queues, ... */
+	if (QueueRxCanHandle == NULL) {
+		Error_Handler();
+	}
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* Web-only test: keep application tasks stopped. */
+  /* MQTT, LCD and button tasks remain stopped. */
   // TaskButtonHandle = osThreadNew(StartTaskButton, NULL, &TaskButton_attributes);
   // TaskLCDHandle = osThreadNew(StartTaskLCD, NULL, &TaskLCD_attributes);
   // TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
   // TaskMQTTHandle = osThreadNew(StartTaskMQTT, NULL, &TaskMQTT_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-	/* add threads, ... */
+	TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
+	if (TaskCanHandle == NULL) {
+		Error_Handler();
+	}
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -462,26 +465,63 @@ void StartTaskCan(void *argument)
 	}
 
 
-	CanConfig();
+	log_put("CAN1 init 50000 bit/s PD0=RX PD1=TX");
+	if (CanConfig() != HAL_OK) {
+		if (HAL_CAN_GetState(&hcan1) == HAL_CAN_STATE_LISTENING &&
+		    HAL_CAN_Stop(&hcan1) != HAL_OK) {
+			log_put("CAN1 stop after init failure failed");
+		}
+		log_put("CAN1 task stopped: init failed");
+		osThreadExit();
+	}
+	log_put("CAN1 RX only ready; ACK on, TX/MQTT off");
 
-	osStatus_t status;
+	uint32_t last_read_errors = 0;
+	uint32_t last_queue_drops = 0;
+	uint32_t last_hal_error = HAL_CAN_ERROR_NONE;
+	uint32_t last_esr = 0;
+	uint32_t status_tick = osKernelGetTickCount();
+	const uint32_t tick_freq = osKernelGetTickFreq();
 
 	for (;;) {
-		{
-			MsgQRxCan_t msg_RxCan;
-			status = osMessageQueueGet(QueueRxCanHandle, &msg_RxCan, NULL, 0);
-			if (status == osOK) {
-				Can_RX(&msg_RxCan);
-			}
+		MsgQRxCan_t msg_RxCan;
+		osStatus_t status = osMessageQueueGet(QueueRxCanHandle, &msg_RxCan,
+		                                      NULL, tick_freq / 10U);
+		if (status == osOK) {
+			/* Do not call the legacy CAN-to-MQTT handlers at this stage. */
+			Can_LogRx(&msg_RxCan);
+		} else if (status != osErrorTimeout) {
+			char s[LOG_LEN - 12];
+			snprintf(s, sizeof(s), "CAN RX queue get err %d", (int)status);
+			log_put(s);
+			osThreadExit();
 		}
-		{
-			MsgQTxCan_t msg_TxCan;
-			status = osMessageQueueGet(QueueTxCanHandle, &msg_TxCan, NULL, 0);
-			if (status == osOK) {
-				my_can_Tx(&msg_TxCan);
-		  }
+
+		uint32_t now = osKernelGetTickCount();
+		if ((uint32_t)(now - status_tick) < tick_freq) {
+			continue;
 		}
-		osDelay(1);
+		status_tick = now;
+		uint32_t read_errors = can_rx_read_errors;
+		uint32_t queue_drops = can_rx_queue_drops;
+		uint32_t hal_error = HAL_CAN_GetError(&hcan1);
+		uint32_t esr = hcan1.Instance->ESR &
+		               (CAN_ESR_EWGF | CAN_ESR_EPVF | CAN_ESR_BOFF | CAN_ESR_LEC);
+		char s[LOG_LEN - 12];
+		if (read_errors != last_read_errors || queue_drops != last_queue_drops) {
+			snprintf(s, sizeof(s), "CAN RX read_err=%lu queue_drop=%lu",
+			         (unsigned long)read_errors, (unsigned long)queue_drops);
+			log_put(s);
+			last_read_errors = read_errors;
+			last_queue_drops = queue_drops;
+		}
+		if (hal_error != last_hal_error || esr != last_esr) {
+			snprintf(s, sizeof(s), "CAN1 HAL=%08lX ESR=%08lX",
+			         (unsigned long)hal_error, (unsigned long)esr);
+			log_put(s);
+			last_hal_error = hal_error;
+			last_esr = esr;
+		}
 	}
   /* USER CODE END StartTaskCan */
 }

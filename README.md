@@ -64,7 +64,30 @@ Przed uruchomieniem sprawdź, czy adres urządzenia nie jest zajęty i czy broke
   `GPIO_PIN_RESET` zapala, a `GPIO_PIN_SET` gasi.
 
 Tymczasowa diagnostyka nasłuchu/łącza/SSI diodami została usunięta.
-CAN, MQTT, LCD i zadanie przycisku pozostają wyłączone.
+MQTT, LCD i zadanie przycisku pozostają wyłączone.
+
+### CAN — etap 1: odbiór i logi
+
+CAN1 działa w trybie normalnym przy 50 kbit/s, na PD0 (RX) i PD1 (TX).
+Potwierdza odbiór ramek przez ACK, ale aplikacja nie wysyła ramek ani poleceń.
+Filtr przyjmuje wszystkie identyfikatory do FIFO0. Callback odbioru przekazuje
+ramkę do kolejki; logowanie odbywa się w zadaniu CAN, nie w przerwaniu.
+Nie są wywoływane odziedziczone funkcje przekazujące CAN do MQTT.
+
+Log WWW/USART1 zawiera wyniki konfiguracji filtra, startu i włączenia przerwań,
+a następnie odebrane ramki, np. `CAN RX S:00000108 DATA L=4 08150001`.
+`S` oznacza ID standardowe, `E` rozszerzone, `L` długość danych; ramki `RTR`
+nie mają danych. Błędy inicjalizacji zatrzymują zadanie CAN, nie WWW.
+Zmiany błędów HAL/ESR oraz liczników błędów odczytu i utraconych ramek kolejki
+są raportowane najwyżej raz na sekundę. Wpisy otrzymują bieżący czas działania.
+
+Kolejka RX mieści 32 ramki po 36 bajtów (nagłówek HAL i pełne 8 bajtów danych).
+Rozmiar został zaktualizowany w `.ioc` i sprawdzony po regeneracji CubeMX
+w osobnym katalogu; przeniesiono tylko zmianę kolejki, bez nadpisywania
+działającej konfiguracji Ethernetu ani ponownego włączania innych zadań.
+Log WWW pokazuje ostatnie 7 wpisów; przy dużym ruchu logowanie każdej ramki
+może przepełnić kolejkę — licznik `queue_drop` ujawnia tę utratę.
+Test startu CAN nie potwierdza jeszcze poprawnej komunikacji z innym węzłem.
 
 ### Konfiguracja buforów Ethernet dla WWW
 
@@ -79,8 +102,8 @@ sterownika Ethernet, niezależnie od ustawienia pojedynczego bufora TX.
 Po wgraniu tej konfiguracji na JZ-F407 potwierdzono w dwóch kolejnych seriach
 pełne odpowiedzi HTTP 200 dla `/` i `/index.shtml` oraz HTTP 404 dla `/404.html`.
 Ping 4/4 również przeszedł. Testowy serwer TCP echo został usunięty;
-firmware nie uruchamia nasłuchu na porcie 2323. CAN i MQTT pozostają
-wyłączone.
+firmware nie uruchamia nasłuchu na porcie 2323. MQTT pozostaje wyłączone;
+CAN uruchamiany jest etapowo, zgodnie z opisem powyżej.
 
 Konfiguracja projektu wskazuje F407, ale wygenerowany kod nie został jeszcze zweryfikowany. Nie wgrywaj dotychczasowych artefaktów z katalogu `Debug` na płytkę F407.
 
