@@ -30,6 +30,12 @@ int ILinia(int lp) { //uint8_t lp) {
 	return (log_item + lp) % LOG_MAX;
 }
 
+void log_get(int lp, char *destination, size_t size) {
+	osMutexAcquire(logMutexHandle, osWaitForever);
+	snprintf(destination, size, "%s", log_items[ILinia(lp)]);
+	osMutexRelease(logMutexHandle);
+}
+
 void log_put(const char *s) {
 
 	osMutexAcquire(logMutexHandle, osWaitForever);

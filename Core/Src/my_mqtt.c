@@ -11,7 +11,7 @@
 #include "cmsis_os2.h"
 #include "my_log.h"
 #include "my_mcu.h"
-#include "my_reku.h"
+#include <stdbool.h>
 
 
 extern osMessageQueueId_t QueueTxMqttHandle;
@@ -22,6 +22,13 @@ extern osMutexId_t putMqttMutexHandle;
 //mqtt_msg__t mqtt_msg;
 
 mqtt_client_t *mqtt_client;
+static bool mqtt_connect_pending;
+static bool mqtt_connect_attempted;
+static bool mqtt_publish_now;
+static uint32_t mqtt_connect_tick;
+static uint32_t mqtt_publish_tick;
+
+#if MQTT_CAN_COMMANDS_ENABLED
 uint8_t data_incoming = 0;
 
 static void mqtt_sub_request_cb(void *arg, err_t result)
@@ -42,16 +49,12 @@ static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len
 //  printf("in: %s %u\n", topic, (unsigned int)tot_len);
 //  log_put(s);
 	data_incoming = 0;
-	if (strstr(topic, "can/") != NULL) {
+	if (strncmp(topic, topic_can, strlen(topic_can)) == 0 &&
+	    topic[strlen(topic_can)] == '/') {
 		data_incoming = 1;
 		my_mcu_recive_mqtt_topic(topic);
 		return;
 	}
-	if (strstr(topic, "rekuperator/") != NULL) {
-		data_incoming = 2;
-		recuperator_recive_mqtt_topic(topic);
-		return;
-  }
 }
 
 
@@ -76,22 +79,20 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
 			 my_mcu_recive_mqtt_data(data, len);
 			 return;
 		}
-		if (data_incoming == 2) {
-			 recuperator_recive_mqtt_data(data, len);
-			 return;
-		}
 
 	}
 }
 
-
+#endif
 
 static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status)
 {
-  err_t err;
+  mqtt_connect_pending = false;
   if(status == MQTT_CONNECT_ACCEPTED) {
-//    printf("mqtt_connection_cb: Successfully connected\n");
+    log_put("MQTT connected: dscan-jz-f407");
+    mqtt_publish_now = true;
 
+#if MQTT_CAN_COMMANDS_ENABLED
     /* Setup callback for incoming publish requests */
 
     mqtt_set_inpub_callback(client, mqtt_incoming_publish_cb, mqtt_incoming_data_cb, arg);
@@ -102,48 +103,22 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
 
     strcpy(t, topic_can);
     strcat(t,"/#");
-    err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
-
-    sprintf(t,"DataSoft/rekuperator/set/#");
-//    sprintf(t,"DataSoft/#");
-    err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
+    err_t err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
 
     if(err != ERR_OK) {
     	char s[LOG_LEN];
 	  	sprintf(s, "sub err %d", err);
       log_put(s);
     }
-/*
-    sprintf(t,"DataSoft/rekuperator/set/#");
-
-    err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
-
-		if(err != ERR_OK) {
-			char s[LOG_LEN];
-			sprintf(s, "sub2 err %d", err);
-			log_put(s);
-		} else
-      log_put("sub2 ok");
-*/
-
-
+#else
+    log_put("MQTT subscriptions off; CAN commands off");
+#endif
     } else {
-      log_put("reconnect");
-      my_mqtt_do_connect(client);
+      char s[LOG_LEN - 12];
+      snprintf(s, sizeof(s), "MQTT disconnected status=%d; retry in 10s", (int)status);
+      log_put(s);
+      mqtt_connect_tick = osKernelGetTickCount();
     }
-/*
-    sprintf(t,"DataSoft/rekuperator/set/#");
-
-    err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
-
-		if(err != ERR_OK) {
-			char s[LOG_LEN];
-			sprintf(s, "sub2 err %d", err);
-			log_put(s);
-		} else {
-			log_put("sub OK");
-    }
-*/
 //  } else {
 //    /* Its more nice to be connected, so try to reconnect */
 //  	//osDelay(100);
@@ -164,7 +139,8 @@ void my_mqtt_do_connect(mqtt_client_t *client)
   memset(&ci, 0, sizeof(ci));
 
   /* Minimal amount of information required is client identifier, so set it here */
-  ci.client_id = "stm32";
+  ci.client_id = "dscan-jz-f407";
+  ci.keep_alive = 30;
   //ci.client_user = "mosquitto";
   //ci.client_pass = "chupasangre"; /* Tiempo en mi caso */
 
@@ -176,7 +152,10 @@ void my_mqtt_do_connect(mqtt_client_t *client)
   ip_addr_t mqttServerIP;
   IP4_ADDR(&mqttServerIP, 192, 168, 1, 2);
 //  err = mqtt_client_connect(client, &mqttServerIP, MQTT_PORT, mqtt_connection_cb, 0, &ci);
+  mqtt_connect_attempted = true;
+  mqtt_connect_tick = osKernelGetTickCount();
   err = mqtt_client_connect(client, &mqttServerIP, MQTT_PORT, mqtt_connection_cb, NULL, &ci);
+  mqtt_connect_pending = err == ERR_OK;
 
   /* For now just print the result code if something goes wrong */
   if(err != ERR_OK) {
@@ -185,9 +164,42 @@ void my_mqtt_do_connect(mqtt_client_t *client)
 	  log_put(s);
   } else {
 	  char s[LOG_LEN];
-	  sprintf(s, "MQTT Connected");
+	  sprintf(s, "MQTT connecting 192.168.1.2:1883");
 	  log_put(s);
 	}
+}
+
+void my_mqtt_service(void *argument)
+{
+    (void)argument;
+    /* Called only through tcpip_callback: all raw MQTT API calls stay in LwIP. */
+    uint32_t now = osKernelGetTickCount();
+    uint32_t interval = 10U * osKernelGetTickFreq();
+    if (mqtt_client == NULL || !mqtt_client_is_connected(mqtt_client)) {
+        if (mqtt_connect_pending ||
+            (mqtt_connect_attempted && (uint32_t)(now - mqtt_connect_tick) < interval)) {
+            return;
+        }
+        if (mqtt_client == NULL) {
+            mqtt_client = mqtt_client_new();
+            if (mqtt_client == NULL) {
+                log_put("MQTT client allocation failed; retry in 10s");
+                mqtt_connect_attempted = true;
+                mqtt_connect_tick = now;
+                return;
+            }
+        }
+        my_mqtt_do_connect(mqtt_client);
+        return;
+    }
+    if (mqtt_publish_now || (uint32_t)(now - mqtt_publish_tick) >= interval) {
+        char payload[11];
+        snprintf(payload, sizeof(payload), "%lu",
+                 (unsigned long)(now / osKernelGetTickFreq()));
+        mqtt_publish_now = false;
+        mqtt_publish_tick = now;
+        my_mqtt_publish(mqtt_client, "dscan/uptime", payload);
+    }
 }
 
 
@@ -198,18 +210,16 @@ static void mqtt_pub_request_cb(void *arg, err_t result)
 	  char s[LOG_LEN];
 	  sprintf(s, "Pub. result: %d\n", result);
 	  log_put(s);
+  } else {
+      log_put("MQTT publish sent (QoS0)");
   }
 }
-
-
-//DataSoft/stm32/energia_odzyskana_total
-//1234567890123456789012345678901234567890
 
 
 void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m)
 {
 	if (! mqtt_client_is_connected(client)){
-		printf("mqtt not connected\n");
+		log_put("MQTT publish failed: not connected");
 		return;
 	}
   err_t err;
@@ -221,7 +231,6 @@ void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m)
 //  if (mqtt_output_check_space(client->output, 20) == 0) {
 
  // }
-  uint16_t tl = strlen(topic);
   uint16_t ml = strlen(m);
 
 
@@ -238,6 +247,10 @@ void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m)
 //    osDelay(1000);
     //HAL_NVIC_SystemReset();
     //while (1) {}; // reset przez wotch dog
+  } else {
+      char s[LOG_LEN - 12];
+      snprintf(s, sizeof(s), "MQTT queued %s=%s", t, m);
+      log_put(s);
   }
 }
 

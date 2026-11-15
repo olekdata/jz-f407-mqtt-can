@@ -69,7 +69,7 @@
 uint8_t my_mcu_send_can(const MsgQRxCan_t *msg_can){ //oodbiór z mcu (can) i wysyłka MQTT
 
 	char b[10];
-	char t[TOPIC_LEN] = "can/";
+	char t[TOPIC_LEN] = "dscan/";
 	char s[LOG_LEN];
 
 	 if (msg_can->RxHeader.ExtId)
@@ -163,7 +163,7 @@ uint8_t my_mcu_send_can(const MsgQRxCan_t *msg_can){ //oodbiór z mcu (can) i wy
   }
 
 	sprintf(s,"to:%d fun:%d val:%d val2:%d", msg_can->RxData.to, msg_can->RxData.fun, msg_can->RxData.val, msg_can->RxData.valL);
-	sprintf(t,"can_reszta/StdId=%d", msg_can->RxHeader.StdId);
+	sprintf(t,"dscan/reszta/StdId=%d", msg_can->RxHeader.StdId);
 
 	my_mqtt_to_Queue(t, s);
 	return 1;

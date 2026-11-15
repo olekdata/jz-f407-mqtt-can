@@ -11,7 +11,6 @@
 #include "my_log.h"
 #include "cmsis_os2.h"
 #include <string.h>
-#include "my_reku.h"
 
 uint32_t TxMailbox;
 CAN_FilterTypeDef Can_FilterConfig;
@@ -101,8 +100,6 @@ void Can_RX(const MsgQRxCan_t *msg_can){
 
  char s[80];
 
-	if (Reku_RX(msg_can))
-		return;
 /*
 	 sprintf(s,"can_rx<%X %X %X %X %02X%02X%02X%02X%02X%02X%02X%02X",
 				     msg_can->RxHeader.IDE,
@@ -150,17 +147,6 @@ void my_can_Tx_Queue(const MsgQTxCan_t *msg){
 
 void my_can_Tx(const MsgQTxCan_t *msg){
 	char s[80];
-	/*
-	MsgQTxCanReku_t *msgR = msg;
-	sprintf(s,"can_tx>%X %X %X %X %X %02X%02X%02X%02X%02X%02X%02X%02X",
-						 msgR->TxHeader.IDE,
-						 msgR->TxHeader.ExtId,
-						 msgR->TxHeader.StdId,
-						 msgR->TxHeader.RTR,
-						 msgR->TxHeader.DLC,
-						 msgR->TxData[0], msgR->TxData[1], msgR->TxData[2], msgR->TxData[3],
-						 msgR->TxData[4], msgR->TxData[5], msgR->TxData[6], msgR->TxData[7]);
-	*/
 	const MsgQTxCan_t *msgR = msg;
 
 	sprintf(s,"can_tx>%X %X %X %X %X %02X%02X%02X%02X",

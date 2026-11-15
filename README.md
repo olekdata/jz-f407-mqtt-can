@@ -20,7 +20,6 @@ Firmware dla mikrokontrolera STM32F207ZGT6, który łączy sieć Ethernet i brok
 
 - Odbieranie i wysyłanie ramek CAN.
 - Publikowanie danych z CAN w MQTT oraz przekazywanie wybranych poleceń MQTT do CAN.
-- Odczyt parametrów rekuperatora z ramek CAN i sterowanie poziomem wentylatora.
 - Prosta strona WWW do sterowania diodami LED i podglądu logu.
 - Wyświetlanie logu na OLED SSD1306.
 - Zadania i kolejki komunikatów oparte na FreeRTOS.
@@ -47,7 +46,7 @@ Firmware używa statycznej konfiguracji IPv4:
 | Maska | `255.255.255.0` |
 | Brama | `192.168.1.1` |
 | Broker MQTT | `192.168.1.2:1883` |
-| Identyfikator klienta MQTT | `stm32` |
+| Identyfikator klienta MQTT | `dscan-jz-f407` |
 
 Przed uruchomieniem sprawdź, czy adres urządzenia nie jest zajęty i czy broker jest osiągalny z tej samej sieci. DHCP jest wyłączone. Adres IP urządzenia zmienia się w `LWIP/App/lwip.c`, a adres brokera w `Core/Src/my_mqtt.c`. Po zmianie konfiguracji przebuduj i wgraj firmware.
 
@@ -64,7 +63,7 @@ Przed uruchomieniem sprawdź, czy adres urządzenia nie jest zajęty i czy broke
   `GPIO_PIN_RESET` zapala, a `GPIO_PIN_SET` gasi.
 
 Tymczasowa diagnostyka nasłuchu/łącza/SSI diodami została usunięta.
-MQTT, LCD i zadanie przycisku pozostają wyłączone.
+LCD i zadanie przycisku pozostają wyłączone.
 
 ### CAN — etap 1: odbiór i logi
 
@@ -85,7 +84,7 @@ Kolejka RX mieści 32 ramki po 36 bajtów (nagłówek HAL i pełne 8 bajtów dan
 Rozmiar został zaktualizowany w `.ioc` i sprawdzony po regeneracji CubeMX
 w osobnym katalogu; przeniesiono tylko zmianę kolejki, bez nadpisywania
 działającej konfiguracji Ethernetu ani ponownego włączania innych zadań.
-Log WWW pokazuje ostatnie 7 wpisów; przy dużym ruchu logowanie każdej ramki
+Log WWW pokazuje ostatnie 50 wpisów; przy dużym ruchu logowanie każdej ramki
 może przepełnić kolejkę — licznik `queue_drop` ujawnia tę utratę.
 Test startu CAN nie potwierdza jeszcze poprawnej komunikacji z innym węzłem.
 
@@ -99,11 +98,17 @@ Opcja zwiększa koszt kopiowania i użycie RAM, ale nie zmienia protokołu ani
 treści strony.
 `LWIP_SUPPORT_CUSTOM_PBUF=1` zachowuje obsługę własnych buforów odbiorczych
 sterownika Ethernet, niezależnie od ustawienia pojedynczego bufora TX.
+`MEM_SIZE=10*1024` zapewnia pamięć dla równoczesnego MQTT i WWW z 50 wpisami.
+Przy poprzednim limicie 5 KB po uruchomieniu MQTT zaobserwowano nieudane
+alokacje LwIP i zanikanie odpowiedzi HTTP.
+`TCPIP_THREAD_STACKSIZE=4096` zapewnia stos dla równoczesnej obsługi HTTP,
+MQTT i logowania. Po włączeniu MQTT potwierdzono nadpisanie początku
+poprzedniego stosu o wielkości 1024 bajtów.
 Po wgraniu tej konfiguracji na JZ-F407 potwierdzono w dwóch kolejnych seriach
 pełne odpowiedzi HTTP 200 dla `/` i `/index.shtml` oraz HTTP 404 dla `/404.html`.
 Ping 4/4 również przeszedł. Testowy serwer TCP echo został usunięty;
-firmware nie uruchamia nasłuchu na porcie 2323. MQTT pozostaje wyłączone;
-CAN uruchamiany jest etapowo, zgodnie z opisem powyżej.
+firmware nie uruchamia nasłuchu na porcie 2323. CAN i MQTT uruchamiane są
+etapowo, zgodnie z opisami w tym dokumencie.
 
 Konfiguracja projektu wskazuje F407, ale wygenerowany kod nie został jeszcze zweryfikowany. Nie wgrywaj dotychczasowych artefaktów z katalogu `Debug` na płytkę F407.
 
@@ -116,9 +121,74 @@ Konfiguracja projektu wskazuje F407, ale wygenerowany kod nie został jeszcze zw
 
 STM32CubeMX pozostaje narzędziem do edycji `.ioc` i generowania kodu. STM32CubeIDE nie jest wymagane do konfiguracji ani budowania projektu.
 
+## Skrypty testowe pyAI
+
+Skrypty diagnostyczne tworzone przy rozwijaniu tego projektu zapisujemy w
+[`pyAI`](./pyAI), aby można było je przeglądać i uruchamiać ponownie.
+Wymagają Python 3.9 lub nowszego, bez dodatkowych pakietów. Poniższe polecenia
+uruchamiaj z katalogu projektu; błędy kończą skrypt kodem różnym od zera.
+
+- [`test_mqtt_www.py`](./pyAI/test_mqtt_www.py) sprawdza równolegle siedem
+  publikacji `DataSoft/dscan/uptime` (odstępy i przyrost uptime 9–12 s)
+  oraz odpowiedzi HTTP 200 z dokładnie 50 wyrenderowanymi wierszami logów
+  dla `/` i `/index.shtml`. Test trwa około 65–80 sekund.
+  Używa unikalnego identyfikatora klienta, tylko subskrybuje temat testowy:
+  nie publikuje poleceń, nie steruje LED i nie korzysta z `DataSoft/can`.
+
+  ```powershell
+  python .\pyAI\test_mqtt_www.py
+  python .\pyAI\test_mqtt_www.py --device 192.168.1.249 --broker 192.168.1.2 --port 1883
+  ```
+
+- [`inspect_mcu.py`](./pyAI/inspect_mcu.py) odczytuje przez ST-Link w trybie
+  HOTPLUG zapas stosu TCP/IP, statystyki sterty LwIP oraz rejestry CAN1.
+  Nie wgrywa firmware, nie resetuje ani celowo nie zatrzymuje MCU.
+  Wymaga STM32CubeProgrammer i GDB ARM; ich domyślne ścieżki odpowiadają
+  lokalnej instalacji Windows i można je zmienić przez `--programmer` i `--gdb`.
+  Numer docelowego ST-Link podaj jawnie przez `--serial`.
+
+  ```powershell
+  python .\pyAI\inspect_mcu.py --serial "numer-ST-LINK"
+  ```
+
+  Adresy symboli, pola TCB i układ statystyk są ustalane z aktualnego ELF,
+  domyślnie `build\debug\JZ-F407-MQTT-CAN.elf` (`--elf` wybiera inny plik).
+  **ELF musi odpowiadać dokładnie wgranemu firmware.** Diagnostyka jest
+  przeznaczona dla STM32F407 i obecnego alokatora `heap_3`; odczyt działającego
+  MCU nie jest atomowym snapshotem. Zapas stosu jest mierzony wzorcem A5
+  pozostawionym przez FreeRTOS; wymagane jest minimum 512 bajtów.
+  Błędy alokacji LwIP, niepoprawne odczyty i zajęte mailboxy TX CAN powodują
+  niepowodzenie kontroli. Puste mailboxy nie dowodzą braku wcześniejszego TX,
+  a ten skrypt nie zastępuje testu odbioru CAN z rzeczywistym nadajnikiem.
+
 ## MQTT
 
-Wszystkie tematy publikowane przez firmware mają prefiks `DataSoft/`. Publikacja używa QoS 0 i nie ustawia retained message. Po połączeniu urządzenie subskrybuje `DataSoft/can/#` oraz `DataSoft/rekuperator/set/#`.
+### Etapy 1–2: połączenie i testowa publikacja
+
+Zadanie MQTT jest włączone. Łączy się z `192.168.1.2:1883` jako
+`dscan-jz-f407`, bez używania identyfikatora `stm32` starej instalacji.
+Publikuje czas działania w sekundach pod `DataSoft/dscan/uptime`,
+po połączeniu i następnie co 10 sekund, z QoS 0 i bez retained.
+Nie subskrybuje żadnych tematów i nie przekazuje poleceń ani danych CAN.
+`MQTT_CAN_COMMANDS_ENABLED=0` wyłącza odziedziczone callbacki poleceń.
+
+Zadanie co sekundę zleca krótką obsługę przez `tcpip_callback`; tworzenie
+klienta, połączenie i publikacja odbywają się wyłącznie w wątku TCP/IP.
+Zadanie MQTT używa statycznego stosu i bloku kontrolnego, aby oszczędzać
+pamięć alokowaną dynamicznie. Projekt używa `heap_3` (alokatora newlib);
+`configTOTAL_HEAP_SIZE` nie jest w tym wariancie limitem alokatora.
+
+Log WWW/USART1 pokazuje próbę połączenia, rzeczywiste potwierdzenie CONNACK,
+zakolejkowanie publikacji, wynik wysyłania i błędy. Wysłanie z QoS 0 nie
+stanowi potwierdzenia odbioru przez aplikację odbiorcy. Po rozłączeniu lub
+błędzie próba połączenia jest ponawiana po 10 sekundach; keep-alive wynosi
+30 sekund. Działające WWW i heartbeat LED1 pozostają niezależne od brokera.
+
+### Przyszłe przekazywanie CAN↔MQTT
+
+Przestrzeń tematów została zmieniona z używanego przez starą instalację
+`DataSoft/can` na `DataSoft/dscan`. Poniższe mapowania są zachowane w kodzie
+na następny etap, ale obecnie przekazywanie CAN↔MQTT jest wyłączone.
 
 ### Dane z CAN
 
@@ -126,21 +196,21 @@ Przykładowe tematy publikowane dla standardowych ramek CAN:
 
 | Temat | Znaczenie / wartość |
 |---|---|
-| `DataSoft/can/<ID>/roleta` | Stan rolety: `ON`, `OFF` albo `STOP` |
-| `DataSoft/can/<ID>/roleta_pos` | Wartość pozycji rolety |
-| `DataSoft/can/<ID>/switch1` | Stan przełącznika 1: `ON` albo `OFF` |
-| `DataSoft/can/<ID>/switch2` | Stan przełącznika 2: `ON` albo `OFF` |
-| `DataSoft/can/<ID>/sensor1` | Stan czujnika 1: `ON` albo `OFF` |
-| `DataSoft/can/<ID>/sensor2` | Stan czujnika 2: `ON` albo `OFF` |
-| `DataSoft/can/<ID>/prad` | Wartość pomiaru prądu |
-| `DataSoft/can/<ID>/temp` | Wartość temperatury przekazana przez urządzenie CAN |
+| `DataSoft/dscan/<ID>/roleta` | Stan rolety: `ON`, `OFF` albo `STOP` |
+| `DataSoft/dscan/<ID>/roleta_pos` | Wartość pozycji rolety |
+| `DataSoft/dscan/<ID>/switch1` | Stan przełącznika 1: `ON` albo `OFF` |
+| `DataSoft/dscan/<ID>/switch2` | Stan przełącznika 2: `ON` albo `OFF` |
+| `DataSoft/dscan/<ID>/sensor1` | Stan czujnika 1: `ON` albo `OFF` |
+| `DataSoft/dscan/<ID>/sensor2` | Stan czujnika 2: `ON` albo `OFF` |
+| `DataSoft/dscan/<ID>/prad` | Wartość pomiaru prądu |
+| `DataSoft/dscan/<ID>/temp` | Wartość temperatury przekazana przez urządzenie CAN |
 
-`<ID>` to identyfikator urządzenia w ramce CAN. Przykładowo `DataSoft/can/1/roleta`.
+`<ID>` to identyfikator urządzenia w ramce CAN. Przykładowo `DataSoft/dscan/1/roleta`.
 
 Aby wysłać polecenie do urządzenia CAN, użyj tematu z segmentem `set`, na przykład:
 
 ```text
-Temat:   DataSoft/can/1/set/roleta
+Temat:   DataSoft/dscan/1/set/roleta
 Payload: ON
 ```
 
@@ -191,28 +261,11 @@ Wiadomości MQTT do funkcji `4`, `5` i `6` nie są więc poleceniami obsługiwan
 
 #### Urządzenia roletowe i wejścia/wyjścia
 
-Dla polecenia MQTT, np. `DataSoft/can/8/set/roleta`, bramka wysyła ramkę z `StdId=0x100+8`, `DLC=3` i bajtami `00 01 01` dla polecenia `ON`. Przykładowe dane polecenia roletowego: `to=0`, `fun=1`, `val=1`. Dla `OFF` wartość `val` wynosi `0`, a dla `STOP` `255`. Polecenia przełączników używają odpowiednio `fun=2` albo `fun=3` i wartości `0`/`1`.
+Dla polecenia MQTT, np. `DataSoft/dscan/8/set/roleta`, bramka wysyła ramkę z `StdId=0x100+8`, `DLC=3` i bajtami `00 01 01` dla polecenia `ON`. Przykładowe dane polecenia roletowego: `to=0`, `fun=1`, `val=1`. Dla `OFF` wartość `val` wynosi `0`, a dla `STOP` `255`. Polecenia przełączników używają odpowiednio `fun=2` albo `fun=3` i wartości `0`/`1`.
 
-Sterownik odpowiada ramką o tym samym identyfikatorze standardowym; jej `to` zawiera identyfikator sterownika. Dla wyjścia przełącznika odpowiedź zawiera kod funkcji `2` lub `3` i jego stan. Bramka wykorzystuje `to` do publikacji pod `DataSoft/can/<ID>/...`. Sterownik GW_MCU obsługuje tryb włącznika i rolety manualnej; pozostałe kody wymienione w tabeli nie oznaczają, że ta wersja urządzenia je realizuje.
+Sterownik odpowiada ramką o tym samym identyfikatorze standardowym; jej `to` zawiera identyfikator sterownika. Dla wyjścia przełącznika odpowiedź zawiera kod funkcji `2` lub `3` i jego stan. Bramka wykorzystuje `to` do publikacji pod `DataSoft/dscan/<ID>/...`. Sterownik GW_MCU obsługuje tryb włącznika i rolety manualnej; pozostałe kody wymienione w tabeli nie oznaczają, że ta wersja urządzenia je realizuje.
 
 W trybie rolety manualnej raport funkcji `1` jest wysyłany po zakończeniu ruchu i informuje o osiągniętym stanie: `val=1` oznacza roletę otwartą, a `val=0` zamkniętą. Choć bramka przyjmuje payload `STOP` i zamienia go na `val=255`, obecny firmware GW_MCU nie obsługuje zatrzymania z CAN — każda wartość inna niż `1`, w tym `255`, uruchamia zamykanie.
-
-#### Rekuperator
-
-Polecenie poziomu wentylatora korzysta z osobnej ramki z identyfikatorem rozszerzonym `ExtId = 0x1F015051` i `DLC = 8`. Dane mają postać `01 00 20 1C 00 00 <poziom> 00`, gdzie `<poziom>` (0–3) znajduje się w bajcie 6.
-
-### Rekuperator
-
-Odczytane parametry rekuperatora są publikowane pod `DataSoft/rekuperator/<parametr>`. Przykładowe parametry to `wywiew_temp`, `nawiew_temp`, `czerpnia_wilg`, `wydajnosc_wyw`, `bypass_status` i `energia_odzyskana_total`.
-
-Sterowanie poziomem wentylatora:
-
-```text
-Temat:   DataSoft/rekuperator/set/wentylator_poziom
-Payload: 2
-```
-
-Obsługiwane wartości payloadu to `0`–`3`.
 
 ## Interfejs WWW i diagnostyka
 
@@ -222,7 +275,7 @@ Po podłączeniu do tej samej sieci otwórz `http://192.168.1.249/`. Strona pozw
 
 | Katalog / plik | Zawartość |
 |---|---|
-| `Core/Src`, `Core/Inc` | Aplikacja, sterowniki peryferiów i moduły MQTT, CAN, HTTP, logowania oraz rekuperatora |
+| `Core/Src`, `Core/Inc` | Aplikacja, sterowniki peryferiów i moduły MQTT, CAN, HTTP oraz logowania |
 | `LWIP` | Konfiguracja sieci Ethernet i stosu LwIP |
 | `USB_DEVICE` | Interfejs USB CDC |
 | `Middlewares` | LwIP i FreeRTOS |

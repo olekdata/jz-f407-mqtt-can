@@ -124,123 +124,6 @@ def on_connect(mqttc, obj, flags, rc):
     print("rc: " + str(rc))
 
 
-topic_rekup = 'DataSoft/rekuperator'
-
-def Rekuperator(mqttc, msg):
-    id = msg.arbitration_id
-
-    if id == 0x448041: 
-        v = float(msg.data[0]-msg.data[1])/10
-        s = str(v)
-        t = topic_rekup+'/wywiew_temp'
-        mqttc.publish(t, s) 
-        return True
-    if id == 0x00488041: 
-        v = msg.data[0]
-        s = str(v)
-        t = topic_rekup+'/wywiew_wilg'
-        mqttc.publish(t, s)  
-        return True
-        
-    if id == 0x44c041: 
-        v = float(msg.data[0]-msg.data[1])/10            
-        s = str(v)
-        t = topic_rekup+'/wyrzut_temp'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x0048C041: 
-        v = msg.data[0]
-        s = str(v)
-        t = topic_rekup+'/wyrzut_wilg'
-        mqttc.publish(t, s)  
-        return True
-        
-    if id == 0x00370041: 
-        v = float(msg.data[0]-msg.data[1])/10
-        s = str(v)
-        t = topic_rekup+'/czerpnia_temp'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x00490041: 
-        v = msg.data[0]
-        s = str(v)
-        t = topic_rekup+'/czerpnia_wilg'
-        mqttc.publish(t, s)  
-        return True
-
-    if id == 0x00458041: 
-        v = float(msg.data[0]-msg.data[1])/10
-        s = str(v)
-        t = topic_rekup+'/nawiew_temp'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x00498041: 
-        v = msg.data[0]
-        s = str(v)
-        t = topic_rekup+'/nawiew_wilg'
-        mqttc.publish(t, s)  
-        return True
-
-    if id == 0x001DC041: 
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/wydajnosc_wyw'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x001E0041: 
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/wydajnosc_naw'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x001E4041: 
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/wywiew_wen'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x001E8041: 
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/nawiew_wen'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x00200041:
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/energia_curent'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x00204041:
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/energia_total_year'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x00208041:  
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/energia_total'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x00358041:
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/energia_odzyskana_year'
-        mqttc.publish(t, s)  
-        return True
-    if id == 0x0035C041:
-        v = msg.data[0]+msg.data[1]*256
-        s = str(v)
-        t = topic_rekup+'/energia_odzyskana_total'
-        mqttc.publish(t, s)  
-        return True
-    return False
-
-
-# kogo� repozytory bliblioteki komunikacji dla rekuperatora Zehnder 
-# https://github.com/marco-hoyer/zcan/blob/9ac9ec891ac3d852b140a39da95212c98c116f57/src/main/python/zcan/mapping.py#L6
-# https://github.com/michaelarnauts/comfoconnect
 #os.system('sudo ifconfig can0 down')
 
 
@@ -259,8 +142,7 @@ def IDFind(topic):
 
 def on_message(mqttc, obj, msg):
 #    print("receive -> "+ msg.topic + " " + str(msg.qos) + " " + str(msg.payload))
-    if msg.topic.find('rekuperator') == -1:
-        print "=> MQTT: {} - {}".format(msg.topic, msg.payload)
+    print "=> MQTT: {} - {}".format(msg.topic, msg.payload)
         
     if (msg.topic.find(topic_can) > -1) and (msg.topic.find('/set') > -1):   
         id = IDFind(msg.topic)
@@ -325,8 +207,6 @@ mqttc.loop_start()
 
 while 1:
     msg = can0.recv(30.0)
-    if Rekuperator(mqttc, msg):
-        continue
     #print(msg)
     if not(msg is None) and not(msg.is_extended_id):
         print ("=> Can: " , msg)

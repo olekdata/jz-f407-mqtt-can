@@ -8,7 +8,7 @@
 #ifndef INC_MY_LOG_H_
 #define INC_MY_LOG_H_
 
-#define LOG_MAX 7
+#define LOG_MAX 50
 #define LOG_LEN 70
 
 #ifndef MIN
@@ -33,6 +33,7 @@ extern char slicz[20];
 //int ILinia(uint8_t lp);
 int ILinia(int lp);
 void log_put(const char *s);
+void log_get(int lp, char *destination, size_t size);
 void set_stime();
 
 #endif /* INC_MY_LOG_H_ */

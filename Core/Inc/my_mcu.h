@@ -16,7 +16,7 @@ void my_mcu_recive_mqtt_topic(const char *topic);
 void my_mcu_recive_mqtt_data(const u8_t *data, u16_t len);
 
 #define topic_root "DataSoft"
-#define topic_can  "DataSoft/can"
+#define topic_can  "DataSoft/dscan"
 #define topic_roleta  "/roleta"
 #define topic_switch1 "/switch1"
 #define topic_switch2 "/switch2"

@@ -72,6 +72,8 @@ uint8_t LWIP_Init_flag = 0;
 /* USER CODE BEGIN Variables */
 static volatile uint32_t can_rx_read_errors;
 static volatile uint32_t can_rx_queue_drops;
+static uint32_t mqtt_task_stack[1024];
+static osStaticThreadDef_t mqtt_task_control_block;
 _Static_assert(sizeof(MsgQRxCan_t) == 36U, "Update CubeMX CAN RX queue item size");
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -305,7 +307,7 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* MQTT, LCD and button tasks remain stopped. */
+  /* LCD and button tasks remain stopped. */
   // TaskButtonHandle = osThreadNew(StartTaskButton, NULL, &TaskButton_attributes);
   // TaskLCDHandle = osThreadNew(StartTaskLCD, NULL, &TaskLCD_attributes);
   // TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
@@ -314,6 +316,14 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_THREADS */
 	TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
 	if (TaskCanHandle == NULL) {
+		Error_Handler();
+	}
+	osThreadAttr_t mqtt_attributes = TaskMQTT_attributes;
+	mqtt_attributes.stack_mem = mqtt_task_stack;
+	mqtt_attributes.cb_mem = &mqtt_task_control_block;
+	mqtt_attributes.cb_size = sizeof(mqtt_task_control_block);
+	TaskMQTTHandle = osThreadNew(StartTaskMQTT, NULL, &mqtt_attributes);
+	if (TaskMQTTHandle == NULL) {
 		Error_Handler();
 	}
   /* USER CODE END RTOS_THREADS */
@@ -474,7 +484,7 @@ void StartTaskCan(void *argument)
 		log_put("CAN1 task stopped: init failed");
 		osThreadExit();
 	}
-	log_put("CAN1 RX only ready; ACK on, TX/MQTT off");
+	log_put("CAN1 RX only ready; ACK on, TX/bridge off");
 
 	uint32_t last_read_errors = 0;
 	uint32_t last_queue_drops = 0;
@@ -544,32 +554,16 @@ void StartTaskMQTT(void *argument)
 		osDelay(10);
 	}
 
-	mqtt_client = mqtt_client_new();
-	if (mqtt_client == NULL) {
-		log_put("MQTT client allocation failed");
-		for (;;) {
-			osDelay(1000);
+	log_put("MQTT stages 1-2: connect and uptime only");
+	for (;;) {
+		err_t status = tcpip_callback(my_mqtt_service, NULL);
+		if (status != ERR_OK) {
+			char s[LOG_LEN - 12];
+			snprintf(s, sizeof(s), "MQTT service queue err %d", (int)status);
+			log_put(s);
 		}
+		osDelay(osKernelGetTickFreq());
 	}
-
-	my_mqtt_do_connect(mqtt_client);
-
-  /* Infinite loop */
-  for(;;)
-  {
-    if (mqtt_client_is_connected(mqtt_client)){
-  		osStatus_t status;
-  		mqtt_msg__t mqtt_msg;
-
-			status = osMessageQueueGet(QueueTxMqttHandle, &mqtt_msg, NULL, 0U); // wait for message
-			if (status == osOK)
-				my_mqtt_publish(mqtt_client, mqtt_msg.topic, mqtt_msg.value);
-		} else {
-//			log_put("mqtt not cone.");
- // 		my_mqtt_do_connect(&mqtt_client);
-		}
-    osDelay(1);
-  }
   /* USER CODE END StartTaskMQTT */
 }
 

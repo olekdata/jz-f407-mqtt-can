@@ -28,10 +28,17 @@ tCGI theCGItable[1];
 u16_t mySSIHandler(int iIndex, char *pcInsert, int iInsertLen);
 
 // [* SSI #2 *]
-#define numSSItags 9
+#define numSSItags (LOG_MAX + 2)
 
 // [* SSI #3 *]
-char const *theSSItags[numSSItags] = { "tag1", "tag2", "w1", "w2", "w3", "w4", "w5", "w6", "w7" };
+char const *theSSItags[numSSItags] = {
+	"tag1", "tag2",
+	"w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9", "w10",
+	"w11", "w12", "w13", "w14", "w15", "w16", "w17", "w18", "w19", "w20",
+	"w21", "w22", "w23", "w24", "w25", "w26", "w27", "w28", "w29", "w30",
+	"w31", "w32", "w33", "w34", "w35", "w36", "w37", "w38", "w39", "w40",
+	"w41", "w42", "w43", "w44", "w45", "w46", "w47", "w48", "w49", "w50"
+};
 
 // the actual function for handling CGI [= CGI #5 =]
 const char* LedCGIhandler(int iIndex, int iNumParams, char *pcParam[],
@@ -98,10 +105,9 @@ u16_t mySSIHandler(int iIndex, char *pcInsert, int iInsertLen) {
 			strcpy(pcInsert, myStr2);
 			return strlen(myStr2);
 		}
-	} else if (iIndex < 10) {
-		uint8_t i = ILinia(iIndex - 2);
-		strcpy(pcInsert, log_items[i]);
-		return strlen(log_items[i]);
+	} else if (iIndex >= 2 && iIndex < numSSItags) {
+		log_get(iIndex - 2, pcInsert, (size_t)iInsertLen);
+		return strlen(pcInsert);
 	}
 	return 0;
 }
