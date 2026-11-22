@@ -10,8 +10,6 @@
 
 #include "mqtt.h"
 
-#define MQTT_CAN_COMMANDS_ENABLED 0
-
 #define MQTT_MSG_TOPIC_LEN  50
 #define MQTT_MSG_VALUE_LEN  50
 
@@ -27,7 +25,6 @@ extern mqtt_client_t *mqtt_client;
 
 void my_mqtt_do_connect(mqtt_client_t *client);
 void my_mqtt_service(void *argument);
-void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m);
 void my_mqtt_to_Queue(const char *t, const char *m);
 
 

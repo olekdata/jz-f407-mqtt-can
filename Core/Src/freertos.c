@@ -29,6 +29,8 @@
 #include "stm32f4xx_hal.h"
 #include "stdio.h"
 #include "my_log.h"
+#include "my_time.h"
+#include "rtc.h"
 #include "my_can.h"
 #include "iwdg.h"
 #include "mqtt.h"
@@ -36,8 +38,9 @@
 //#include "eeprom.h"
 #include "httpd.h"
 #include "my_httpd.h"
+#include "fatfs.h"
+#include "fatfs_platform.h"
 
-#include "ssd1306.h"
 #include "netif.h"
 #include "lwip/tcpip.h"
 #include "string.h"
@@ -72,9 +75,18 @@ uint8_t LWIP_Init_flag = 0;
 /* USER CODE BEGIN Variables */
 static volatile uint32_t can_rx_read_errors;
 static volatile uint32_t can_rx_queue_drops;
-static uint32_t mqtt_task_stack[1024];
-static osStaticThreadDef_t mqtt_task_control_block;
+static uint32_t sd_task_stack[1024];
+static osStaticThreadDef_t sd_task_control_block;
+static const osThreadAttr_t sd_task_attributes = {
+  .name = "SDCardTask",
+  .cb_mem = &sd_task_control_block,
+  .cb_size = sizeof(sd_task_control_block),
+  .stack_mem = sd_task_stack,
+  .stack_size = sizeof(sd_task_stack),
+  .priority = osPriorityLow,
+};
 _Static_assert(sizeof(MsgQRxCan_t) == 36U, "Update CubeMX CAN RX queue item size");
+_Static_assert(sizeof(MsgQTxCan_t) == 32U, "Update CubeMX CAN TX queue item size");
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -100,18 +112,6 @@ const osThreadAttr_t TaskButton_attributes = {
   .stack_size = sizeof(TaskButtonBuffer),
   .priority = (osPriority_t) osPriorityLow,
 };
-/* Definitions for TaskLCD */
-osThreadId_t TaskLCDHandle;
-uint32_t TaskLCDBuffer[ 1024 ];
-osStaticThreadDef_t TaskLCDControlBlock;
-const osThreadAttr_t TaskLCD_attributes = {
-  .name = "TaskLCD",
-  .cb_mem = &TaskLCDControlBlock,
-  .cb_size = sizeof(TaskLCDControlBlock),
-  .stack_mem = &TaskLCDBuffer[0],
-  .stack_size = sizeof(TaskLCDBuffer),
-  .priority = (osPriority_t) osPriorityLow,
-};
 /* Definitions for TaskCan */
 osThreadId_t TaskCanHandle;
 const osThreadAttr_t TaskCan_attributes = {
@@ -121,9 +121,14 @@ const osThreadAttr_t TaskCan_attributes = {
 };
 /* Definitions for TaskMQTT */
 osThreadId_t TaskMQTTHandle;
+uint32_t TaskMQTTBuffer[ 1024 ];
+osStaticThreadDef_t TaskMQTTControlBlock;
 const osThreadAttr_t TaskMQTT_attributes = {
   .name = "TaskMQTT",
-  .stack_size = 1024 * 4,
+  .cb_mem = &TaskMQTTControlBlock,
+  .cb_size = sizeof(TaskMQTTControlBlock),
+  .stack_mem = &TaskMQTTBuffer[0],
+  .stack_size = sizeof(TaskMQTTBuffer),
   .priority = (osPriority_t) osPriorityNormal1,
 };
 /* Definitions for QueueRxCan */
@@ -183,6 +188,10 @@ const osSemaphoreAttr_t BinarySemLCD_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
+static void StartSDTask(void *argument);
+static void RunSDCardTest(void);
+static FRESULT AppendSDLogLine(FIL *file, const char *line);
+
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == USER_Btn_Pin) {
 		osSemaphoreRelease(BinarySemButtonHandle);
@@ -218,7 +227,6 @@ static void StartHttpServer(void *argument)
 
 void StartDefaultTask(void *argument);
 void StartTaskButton(void *argument);
-void StartTaskLCD(void *argument);
 void StartTaskCan(void *argument);
 void StartTaskMQTT(void *argument);
 
@@ -244,6 +252,244 @@ return 0;
 /* USER CODE END 1 */
 
 /* USER CODE BEGIN 4 */
+static void LogFatFsError(const char *operation, FRESULT result)
+{
+	char message[LOG_LEN];
+	snprintf(message, sizeof(message), "SD %s failed: %u", operation, (unsigned)result);
+	log_put(message);
+}
+
+static void RunSDCardTest(void)
+{
+	char test_path[20];
+	int path_length = snprintf(test_path, sizeof(test_path), "%sSDTEST.TXT", SDPath);
+	if (path_length < 0 || (size_t)path_length >= sizeof(test_path)) {
+		log_put("SD test path too long");
+		return;
+	}
+
+	FIL file;
+	FRESULT result = f_open(&file, test_path, FA_READ);
+	if (result == FR_OK) {
+		uint8_t buffer[32];
+		UINT bytes_read = 0U;
+		result = f_read(&file, buffer, (UINT)sizeof(buffer), &bytes_read);
+		FRESULT close_result = f_close(&file);
+		if (result != FR_OK) {
+			LogFatFsError("test file read", result);
+		}
+		if (close_result != FR_OK) {
+			LogFatFsError("test file close", close_result);
+		}
+		if (result == FR_OK && close_result == FR_OK) {
+			log_put("SDTEST.TXT read; existing file preserved");
+		}
+		return;
+	}
+	if (result != FR_NO_FILE) {
+		LogFatFsError("test file open", result);
+		return;
+	}
+
+	result = f_open(&file, test_path, (BYTE)(FA_WRITE | FA_CREATE_NEW));
+	if (result != FR_OK) {
+		LogFatFsError("test file create", result);
+		return;
+	}
+
+	static const uint8_t test_data[] = "DS-CAN SD test\r\n";
+	const UINT test_data_size = (UINT)(sizeof(test_data) - 1U);
+	UINT bytes_written = 0U;
+	result = f_write(&file, test_data, test_data_size, &bytes_written);
+	FRESULT close_result = f_close(&file);
+	if (result != FR_OK) {
+		LogFatFsError("test file write", result);
+	}
+	if (bytes_written != test_data_size && result == FR_OK) {
+		log_put("SD test file short write");
+	}
+	if (close_result != FR_OK) {
+		LogFatFsError("test file close", close_result);
+	}
+	if (result == FR_OK && bytes_written == test_data_size && close_result == FR_OK) {
+		log_put("SDTEST.TXT created and written");
+	}
+}
+
+static FRESULT AppendSDLogLine(FIL *file, const char *line)
+{
+	size_t line_length = strlen(line);
+	UINT bytes_written = 0U;
+	FRESULT result = f_write(file, line, (UINT)line_length, &bytes_written);
+	if (result == FR_OK && bytes_written != (UINT)line_length) {
+		return FR_DISK_ERR;
+	}
+	return result;
+}
+
+static void StartSDTask(void *argument)
+{
+	(void)argument;
+	if (retSD != 0U) {
+		log_put("SD driver link failed");
+		osThreadExit();
+		return;
+	}
+
+	bool card_missing_reported = false;
+	bool mount_error_reported = false;
+	bool log_open_error_reported = false;
+	bool log_write_error_reported = false;
+	uint32_t reported_drops = 0U;
+	for (;;) {
+		if (BSP_PlatformIsDetected() != SD_PRESENT) {
+			if (!card_missing_reported) {
+				log_put("SD card not detected; waiting for insertion");
+				card_missing_reported = true;
+			}
+			osDelay(500U);
+			continue;
+		}
+		card_missing_reported = false;
+
+		FRESULT result = f_mount(&SDFatFS, SDPath, 1U);
+		if (result != FR_OK) {
+			if (!mount_error_reported) {
+				LogFatFsError("mount", result);
+				mount_error_reported = true;
+			}
+			osDelay(1000U);
+			continue;
+		}
+		mount_error_reported = false;
+		log_put("SD FAT volume mounted");
+
+		DWORD free_clusters = 0U;
+		FATFS *filesystem = &SDFatFS;
+		result = f_getfree(SDPath, &free_clusters, &filesystem);
+		if (result != FR_OK) {
+			LogFatFsError("space check", result);
+		} else {
+			char free_space_message[LOG_LEN];
+			snprintf(free_space_message, sizeof(free_space_message),
+			         "SD free clusters: %lu", (unsigned long)free_clusters);
+			log_put(free_space_message);
+		}
+
+		RunSDCardTest();
+
+		FIL log_file;
+		bool file_open = false;
+		uint32_t file_date = 0U;
+		uint32_t last_sync = HAL_GetTick();
+		bool file_dirty = false;
+		for (;;) {
+			if (BSP_PlatformIsDetected() != SD_PRESENT) {
+				log_put("SD card removed; logging paused");
+				break;
+			}
+
+			LogSDEntry entry;
+			if (log_sd_queue_get(&entry, 100U)) {
+				if (!file_open || file_date != entry.date) {
+					if (file_open) {
+						result = f_close(&log_file);
+						file_open = false;
+						if (result != FR_OK) {
+							LogFatFsError("daily log close", result);
+							break;
+						}
+					}
+					char log_path[32];
+					int length;
+					if (entry.date == 0U) {
+						length = snprintf(log_path, sizeof(log_path),
+						                  "%slog_unsynced.txt", SDPath);
+					} else {
+						length = snprintf(log_path, sizeof(log_path),
+						                  "%slog%08lu.txt", SDPath,
+						                  (unsigned long)entry.date);
+					}
+					if (length < 0 || (size_t)length >= sizeof(log_path)) {
+						log_put("SD daily log path too long");
+						break;
+					}
+					result = f_open(&log_file, log_path, (BYTE)(FA_WRITE | FA_OPEN_APPEND));
+					if (result != FR_OK) {
+						if (!log_open_error_reported) {
+							LogFatFsError("log open", result);
+							log_open_error_reported = true;
+						}
+						break;
+					}
+					log_open_error_reported = false;
+					file_open = true;
+					file_date = entry.date;
+					file_dirty = false;
+					last_sync = HAL_GetTick();
+					printf("SD append logging: %s\n", log_path);
+				}
+				result = AppendSDLogLine(&log_file, entry.line);
+				if (result != FR_OK) {
+					if (!log_write_error_reported) {
+						LogFatFsError("log write", result);
+						log_write_error_reported = true;
+					}
+					break;
+				}
+				log_write_error_reported = false;
+				file_dirty = true;
+			} else {
+				uint32_t current_drops = log_sd_queue_dropped();
+				uint32_t new_drops = current_drops - reported_drops;
+				if (new_drops > 0U && file_open) {
+					char warning[LOG_LEN];
+					snprintf(warning, sizeof(warning),
+					         "SD log queue dropped %lu entries\n",
+					         (unsigned long)new_drops);
+					result = AppendSDLogLine(&log_file, warning);
+					if (result != FR_OK) {
+						if (!log_write_error_reported) {
+							LogFatFsError("drop report write", result);
+							log_write_error_reported = true;
+						}
+						break;
+					}
+					printf("%s", warning);
+					reported_drops = current_drops;
+					file_dirty = true;
+				}
+			}
+
+			uint32_t now = HAL_GetTick();
+			if (file_dirty && (uint32_t)(now - last_sync) >= 1000U) {
+				result = f_sync(&log_file);
+				if (result != FR_OK) {
+					if (!log_write_error_reported) {
+						LogFatFsError("log sync", result);
+						log_write_error_reported = true;
+					}
+					break;
+				}
+				file_dirty = false;
+				last_sync = now;
+			}
+		}
+
+		if (file_open) {
+			FRESULT close_result = f_close(&log_file);
+			if (close_result != FR_OK) {
+				LogFatFsError("log close", close_result);
+			}
+		}
+		result = f_mount(NULL, SDPath, 0U);
+		if (result != FR_OK) {
+			LogFatFsError("unmount", result);
+		}
+		osDelay(1000U);
+	}
+}
+
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
 {
    /* Run time stack overflow checking is performed if
@@ -269,7 +515,9 @@ void MX_FREERTOS_Init(void) {
   putMqttMutexHandle = osMutexNew(&putMqttMutex_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
-	/* add mutexes, ... */
+	if (!my_time_init()) {
+		Error_Handler();
+	}
   /* USER CODE END RTOS_MUTEX */
 
   /* Create the semaphores(s) */
@@ -298,7 +546,8 @@ void MX_FREERTOS_Init(void) {
   QueueTxCanHandle = osMessageQueueNew (32, 32, &QueueTxCan_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
-	if (QueueRxCanHandle == NULL) {
+	if (QueueRxCanHandle == NULL || QueueTxCanHandle == NULL ||
+	    QueueTxMqttHandle == NULL || !log_sd_queue_init()) {
 		Error_Handler();
 	}
   /* USER CODE END RTOS_QUEUES */
@@ -307,23 +556,21 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* LCD and button tasks remain stopped. */
-  // TaskButtonHandle = osThreadNew(StartTaskButton, NULL, &TaskButton_attributes);
-  // TaskLCDHandle = osThreadNew(StartTaskLCD, NULL, &TaskLCD_attributes);
-  // TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
-  // TaskMQTTHandle = osThreadNew(StartTaskMQTT, NULL, &TaskMQTT_attributes);
+  /* creation of TaskButton */
+  TaskButtonHandle = osThreadNew(StartTaskButton, NULL, &TaskButton_attributes);
+
+  /* creation of TaskCan */
+  TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
+
+  /* creation of TaskMQTT */
+  TaskMQTTHandle = osThreadNew(StartTaskMQTT, NULL, &TaskMQTT_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-	TaskCanHandle = osThreadNew(StartTaskCan, NULL, &TaskCan_attributes);
-	if (TaskCanHandle == NULL) {
+	if (defaultTaskHandle == NULL || TaskButtonHandle == NULL ||
+	    TaskCanHandle == NULL || TaskMQTTHandle == NULL) {
 		Error_Handler();
 	}
-	osThreadAttr_t mqtt_attributes = TaskMQTT_attributes;
-	mqtt_attributes.stack_mem = mqtt_task_stack;
-	mqtt_attributes.cb_mem = &mqtt_task_control_block;
-	mqtt_attributes.cb_size = sizeof(mqtt_task_control_block);
-	TaskMQTTHandle = osThreadNew(StartTaskMQTT, NULL, &mqtt_attributes);
-	if (TaskMQTTHandle == NULL) {
+	if (osThreadNew(StartSDTask, NULL, &sd_task_attributes) == NULL) {
 		Error_Handler();
 	}
   /* USER CODE END RTOS_THREADS */
@@ -347,6 +594,9 @@ void StartDefaultTask(void *argument)
   MX_LWIP_Init();
   /* USER CODE BEGIN StartDefaultTask */
 	/* Infinite loop */
+	log_put(HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR0) == MY_TIME_RTC_MARKER ?
+	        "RTC retained time; awaiting NTP refresh" :
+	        "RTC not set; uptime logs until NTP sync");
 
 	err_t http_start_status;
 	do {
@@ -359,6 +609,16 @@ void StartDefaultTask(void *argument)
 			osDelay(100);
 		}
 	} while (http_start_status != ERR_OK);
+
+	err_t ntp_start_status;
+	do {
+		ntp_start_status = tcpip_callback(my_time_start_ntp, NULL);
+		if (ntp_start_status != ERR_OK) {
+			log_put("NTP init queue failed; retrying");
+			HAL_IWDG_Refresh(&hiwdg);
+			osDelay(100U);
+		}
+	} while (ntp_start_status != ERR_OK);
 
 	osDelay(1000);
   LWIP_Init_flag = 1;
@@ -380,6 +640,7 @@ void StartDefaultTask(void *argument)
 //	stats_display();
 
 	for (;;) {
+		my_time_poll();
 		HAL_GPIO_TogglePin(LD1_GPIO_Port, LD1_Pin);
 		/* Keep the watchdog serviced while HTTP/LwIP run. */
 		HAL_IWDG_Refresh(&hiwdg);
@@ -398,60 +659,35 @@ void StartDefaultTask(void *argument)
 void StartTaskButton(void *argument)
 {
   /* USER CODE BEGIN StartTaskButton */
-	/* Infinite loop */
+	(void)argument;
+	GPIO_PinState candidate = HAL_GPIO_ReadPin(SW3_GPIO_Port, SW3_Pin);
+	GPIO_PinState stable = candidate;
+	uint32_t candidate_since = HAL_GetTick();
+
 	for (;;) {
-		osSemaphoreAcquire(BinarySemButtonHandle, osWaitForever);
-		LD1ON = !LD1ON;
-		HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, LD1ON);
-//		char s[LOG_LEN];
-//		sprintf(s, "Led2 %d", LD1ON);
-//		log_put(s);
-
-		osDelay(1);
-
-		//mqtt_my_publish(&mqtt_client, "Led2", (char)LD1ON);
-
+		GPIO_PinState raw = HAL_GPIO_ReadPin(SW3_GPIO_Port, SW3_Pin);
+		uint32_t now = HAL_GetTick();
+		if (raw != candidate) {
+			candidate = raw;
+			candidate_since = now;
+		} else if (candidate != stable && (uint32_t)(now - candidate_since) >= 30U) {
+			stable = candidate;
+			if (stable == GPIO_PIN_SET) {
+				MsgQTxCan_t test_frame = {0};
+				HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+				test_frame.TxHeader.StdId = 0x108U;
+				test_frame.TxHeader.IDE = CAN_ID_STD;
+				test_frame.TxHeader.RTR = CAN_RTR_DATA;
+				test_frame.TxHeader.DLC = 3U;
+				test_frame.TxData.to = 0U;
+				test_frame.TxData.fun = 100U;
+				test_frame.TxData.val = 0U;
+				my_can_Tx_Queue(&test_frame);
+			}
+		}
+		osDelay(10U);
 	}
   /* USER CODE END StartTaskButton */
-}
-
-/* USER CODE BEGIN Header_StartTaskLCD */
-/**
- * @brief Function implementing the myTaskLCD thread.
- * @param argument: Not used
- * @retval None
- */
-/* USER CODE END Header_StartTaskLCD */
-void StartTaskLCD(void *argument)
-{
-  /* USER CODE BEGIN StartTaskLCD */
-	/* Infinite loop */
-
-//deb
-	ssd1306_Init();
-
-	char _s[LOG_LEN];
-	uint8_t l;
-
-
-	for (;;) {
-
-//		osSemaphoreAcquire(myBinarySemLCDHandle, osWaitForever);
-
-/*deb*/
-		for (uint8_t i = 0; i < LOG_MAX; i++) {
-			ssd1306_SetCursor(0, 9 * i);
-			strcpy(_s, log_items[ILinia(i)]);
-			l = strlen(_s);
-			memset(&_s[l-1], ' ', LOG_LEN - l);
-			_s[LOG_LEN-1] = '\0';
-			ssd1306_WriteString(_s, Font_6x8, White);
-		}
-		ssd1306_UpdateScreen();
-/* */
-		osDelay(1000);
-	}
-  /* USER CODE END StartTaskLCD */
 }
 
 /* USER CODE BEGIN Header_StartTaskCan */
@@ -484,7 +720,7 @@ void StartTaskCan(void *argument)
 		log_put("CAN1 task stopped: init failed");
 		osThreadExit();
 	}
-	log_put("CAN1 RX only ready; ACK on, TX/bridge off");
+	log_put("CAN1 ready; CAN/MQTT bridge and S3 test TX enabled");
 
 	uint32_t last_read_errors = 0;
 	uint32_t last_queue_drops = 0;
@@ -498,13 +734,18 @@ void StartTaskCan(void *argument)
 		osStatus_t status = osMessageQueueGet(QueueRxCanHandle, &msg_RxCan,
 		                                      NULL, tick_freq / 10U);
 		if (status == osOK) {
-			/* Do not call the legacy CAN-to-MQTT handlers at this stage. */
 			Can_LogRx(&msg_RxCan);
+			Can_RX(&msg_RxCan);
 		} else if (status != osErrorTimeout) {
 			char s[LOG_LEN - 12];
 			snprintf(s, sizeof(s), "CAN RX queue get err %d", (int)status);
 			log_put(s);
 			osThreadExit();
+		}
+
+		MsgQTxCan_t msg_TxCan;
+		if (osMessageQueueGet(QueueTxCanHandle, &msg_TxCan, NULL, 0U) == osOK) {
+			my_can_Tx(&msg_TxCan);
 		}
 
 		uint32_t now = osKernelGetTickCount();
@@ -554,7 +795,7 @@ void StartTaskMQTT(void *argument)
 		osDelay(10);
 	}
 
-	log_put("MQTT stages 1-2: connect and uptime only");
+	log_put("MQTT service: CAN bridge and uptime");
 	for (;;) {
 		err_t status = tcpip_callback(my_mqtt_service, NULL);
 		if (status != ERR_OK) {
@@ -562,7 +803,7 @@ void StartTaskMQTT(void *argument)
 			snprintf(s, sizeof(s), "MQTT service queue err %d", (int)status);
 			log_put(s);
 		}
-		osDelay(osKernelGetTickFreq());
+		osDelay((osKernelGetTickFreq() + 9U) / 10U);
 	}
   /* USER CODE END StartTaskMQTT */
 }

@@ -44,9 +44,12 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "can.h"
-#include "i2c.h"
+#include "dma.h"
+#include "fatfs.h"
 #include "iwdg.h"
 #include "lwip.h"
+#include "rtc.h"
+#include "sdio.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -140,10 +143,13 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_CAN1_Init();
-  MX_I2C2_Init();
+  MX_SDIO_SD_Init();
+  MX_FATFS_Init();
   MX_IWDG_Init();
+  MX_RTC_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -186,7 +192,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI
+                              |RCC_OSCILLATORTYPE_LSE;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;

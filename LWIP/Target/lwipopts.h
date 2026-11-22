@@ -31,6 +31,12 @@
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
 
+#include "my_time.h"
+#define SNTP_MAX_SERVERS 2
+#define SNTP_CHECK_RESPONSE 1
+#define SNTP_UPDATE_DELAY 3600000U
+#define SNTP_SET_SYSTEM_TIME(sec) my_time_ntp_received((uint32_t)(sec))
+
 #define LWIP_DEBUG                      1
 #define MQTT_DEBUG                  LWIP_DBG_ON
 #define MQTT_OUTPUT_RINGBUF_SIZE 2048

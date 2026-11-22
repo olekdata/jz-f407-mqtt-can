@@ -49,10 +49,6 @@ file(WRITE "${MX_GENERATED_CMAKE}" "${MX_GENERATED_CMAKE_CONTENT}")
 add_subdirectory(cmake/stm32cubemx)
 
 target_include_directories(LwIP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/mkfs")
-target_sources(STM32_Drivers PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c_ex.c"
-)
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
@@ -62,14 +58,12 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/eeprom.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/i2c.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/my_can.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/my_httpd.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/my_log.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/my_mcu.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/my_mqtt.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ssd1306.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ssd1306_fonts.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/my_time.c"
 )
 
 # Add include paths

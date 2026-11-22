@@ -10,10 +10,11 @@
 
 #include "my_can.h"
 #include "lwip/arch.h"
+#include <stdbool.h>
 
 uint8_t my_mcu_send_can(const MsgQRxCan_t *msg_can);
-void my_mcu_recive_mqtt_topic(const char *topic);
-void my_mcu_recive_mqtt_data(const u8_t *data, u16_t len);
+bool my_mcu_parse_mqtt_topic(const char *topic, MsgQTxCan_t *msg);
+bool my_mcu_send_mqtt_command(MsgQTxCan_t *msg, const u8_t *data, u16_t len);
 
 #define topic_root "DataSoft"
 #define topic_can  "DataSoft/dscan"

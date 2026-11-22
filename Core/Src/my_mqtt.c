@@ -15,7 +15,6 @@
 
 
 extern osMessageQueueId_t QueueTxMqttHandle;
-extern osMutexId_t putMqttMutexHandle;
 
 
 
@@ -28,91 +27,89 @@ static bool mqtt_publish_now;
 static uint32_t mqtt_connect_tick;
 static uint32_t mqtt_publish_tick;
 
-#if MQTT_CAN_COMMANDS_ENABLED
-uint8_t data_incoming = 0;
+static MsgQTxCan_t incoming_command;
+static u8_t incoming_payload[4];
+static u16_t incoming_expected;
+static u16_t incoming_size;
+static bool mqtt_sub_pending;
+static bool mqtt_subscribed;
+static uint32_t mqtt_sub_tick;
 
 static void mqtt_sub_request_cb(void *arg, err_t result)
 {
-  /* Just print the result code here for simplicity,
-     normal behaviour would be to take some action if subscribe fails like
-     notifying user, retry subscribe or disconnect from server */
-	if (result != 0) {
-		char s[LOG_LEN];
-		sprintf(s, "Sub req %d", result);
-		log_put(s);
-	}
+	(void)arg;
+	mqtt_sub_pending = false;
+	mqtt_subscribed = result == ERR_OK;
+	log_put(mqtt_subscribed ? "MQTT CAN command subscription OK" :
+	                          "MQTT CAN command subscription failed; retry");
 }
 
 static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len)
 {
-//  char s[LOG_LEN];
-//  printf("in: %s %u\n", topic, (unsigned int)tot_len);
-//  log_put(s);
-	data_incoming = 0;
-	if (strncmp(topic, topic_can, strlen(topic_can)) == 0 &&
-	    topic[strlen(topic_can)] == '/') {
-		data_incoming = 1;
-		my_mcu_recive_mqtt_topic(topic);
+	(void)arg;
+	incoming_expected = 0U;
+	incoming_size = 0U;
+	if (!my_mcu_parse_mqtt_topic(topic, &incoming_command)) {
+		log_put("MQTT CAN command: invalid topic");
 		return;
 	}
+	if (tot_len == 0U || tot_len > sizeof(incoming_payload)) {
+		log_put("MQTT CAN command: invalid payload length");
+		return;
+	}
+	incoming_expected = (u16_t)tot_len;
 }
 
 
 static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t flags)
 {
 
-//  char s[LOG_LEN];
-//  char s2[LOG_LEN];
-//  strncpy(s, data, len);//  sprintf(s,"data: %s", (const char *)data);
-//  s[len] = '\0';
-
-
-//  printf("flag:%d data: %s\n", flags, (const char *)data);
-//    sprintf(s2,"data: %s", s);
-//  log_put(s2);
-
-//   log_put("in xxxx");
-
-	if(flags & MQTT_DATA_FLAG_LAST) {
-
-		if (data_incoming == 1) {
-			 my_mcu_recive_mqtt_data(data, len);
-			 return;
+	(void)arg;
+	if (incoming_expected == 0U) {
+		return;
+	}
+	if (len > incoming_expected - incoming_size) {
+		incoming_expected = 0U;
+		log_put("MQTT CAN command: payload overflow");
+		return;
+	}
+	if (len != 0U) {
+		memcpy(incoming_payload + incoming_size, data, len);
+		incoming_size += len;
+	}
+	if ((flags & MQTT_DATA_FLAG_LAST) != 0U) {
+		if (incoming_size != incoming_expected ||
+		    !my_mcu_send_mqtt_command(&incoming_command, incoming_payload, incoming_size)) {
+			log_put("MQTT CAN command: invalid payload");
 		}
-
+		incoming_expected = 0U;
 	}
 }
 
-#endif
+static void mqtt_subscribe_commands(mqtt_client_t *client)
+{
+	mqtt_sub_tick = osKernelGetTickCount();
+	err_t err = mqtt_subscribe(client, topic_can "/+/set/+", 1,
+	                           mqtt_sub_request_cb, NULL);
+	mqtt_sub_pending = err == ERR_OK;
+	if (err != ERR_OK) {
+		log_put("MQTT CAN command subscription not queued; retry");
+	}
+}
 
 static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status)
 {
+  (void)arg;
   mqtt_connect_pending = false;
+  mqtt_sub_pending = false;
+  mqtt_subscribed = false;
+  incoming_expected = 0U;
   if(status == MQTT_CONNECT_ACCEPTED) {
     log_put("MQTT connected: dscan-jz-f407");
     mqtt_publish_now = true;
 
-#if MQTT_CAN_COMMANDS_ENABLED
-    /* Setup callback for incoming publish requests */
-
-    mqtt_set_inpub_callback(client, mqtt_incoming_publish_cb, mqtt_incoming_data_cb, arg);
-
-    /* Subscribe to a topic named "subtopic" with QoS level 1, call mqtt_sub_request_cb with result */
-
-    char t[TOPIC_LEN];
-
-    strcpy(t, topic_can);
-    strcat(t,"/#");
-    err_t err = mqtt_subscribe(client, t, 1, mqtt_sub_request_cb, arg);
-
-    if(err != ERR_OK) {
-    	char s[LOG_LEN];
-	  	sprintf(s, "sub err %d", err);
-      log_put(s);
-    }
-#else
-    log_put("MQTT subscriptions off; CAN commands off");
-#endif
+    mqtt_set_inpub_callback(client, mqtt_incoming_publish_cb, mqtt_incoming_data_cb, NULL);
+    mqtt_subscribe_commands(client);
     } else {
       char s[LOG_LEN - 12];
       snprintf(s, sizeof(s), "MQTT disconnected status=%d; retry in 10s", (int)status);
@@ -169,8 +166,12 @@ void my_mqtt_do_connect(mqtt_client_t *client)
 	}
 }
 
+static err_t my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m);
+
 void my_mqtt_service(void *argument)
 {
+    static mqtt_msg__t pending;
+    static bool has_pending;
     (void)argument;
     /* Called only through tcpip_callback: all raw MQTT API calls stay in LwIP. */
     uint32_t now = osKernelGetTickCount();
@@ -192,13 +193,34 @@ void my_mqtt_service(void *argument)
         my_mqtt_do_connect(mqtt_client);
         return;
     }
+    if (!mqtt_subscribed && !mqtt_sub_pending &&
+        (uint32_t)(now - mqtt_sub_tick) >= interval) {
+        mqtt_subscribe_commands(mqtt_client);
+    }
     if (mqtt_publish_now || (uint32_t)(now - mqtt_publish_tick) >= interval) {
         char payload[11];
         snprintf(payload, sizeof(payload), "%lu",
                  (unsigned long)(now / osKernelGetTickFreq()));
-        mqtt_publish_now = false;
-        mqtt_publish_tick = now;
-        my_mqtt_publish(mqtt_client, "dscan/uptime", payload);
+        if (my_mqtt_publish(mqtt_client, "dscan/uptime", payload) != ERR_MEM) {
+            mqtt_publish_now = false;
+            mqtt_publish_tick = now;
+        }
+    }
+    for (unsigned i = 0; i < 4U; ++i) {
+        if (!has_pending) {
+            osStatus_t status = osMessageQueueGet(QueueTxMqttHandle, &pending, NULL, 0U);
+            if (status != osOK) {
+                if (status != osErrorResource) {
+                    log_put("MQTT CAN report queue read failed");
+                }
+                break;
+            }
+            has_pending = true;
+        }
+        if (my_mqtt_publish(mqtt_client, pending.topic, pending.value) == ERR_MEM) {
+            break;
+        }
+        has_pending = false;
     }
 }
 
@@ -216,17 +238,21 @@ static void mqtt_pub_request_cb(void *arg, err_t result)
 }
 
 
-void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m)
+static err_t my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m)
 {
 	if (! mqtt_client_is_connected(client)){
 		log_put("MQTT publish failed: not connected");
-		return;
+		return ERR_CONN;
 	}
   err_t err;
   u8_t qos = 0; // 0 - bez potwierdzenia odbioru
   u8_t retain = 0; // No don't retain such crappy payload...
   char topic[TOPIC_LEN];
-  sprintf(topic, "%s/%s", topic_root, t);
+  int len = snprintf(topic, sizeof(topic), "%s/%s", topic_root, t);
+  if (len < 0 || (size_t)len >= sizeof(topic)) {
+    log_put("MQTT publish: invalid topic length");
+    return ERR_ARG;
+  }
 
 //  if (mqtt_output_check_space(client->output, 20) == 0) {
 
@@ -235,6 +261,9 @@ void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m)
 
 
   err = mqtt_publish(client, topic, m, ml, qos, retain, mqtt_pub_request_cb, 0);
+  if (err == ERR_MEM) {
+    return err;
+  }
   if(err != ERR_OK) {
 	  char s[LOG_LEN];
 	    sprintf(s, "Pub. err: %d (%s)", err, t); 	log_put(s);
@@ -252,24 +281,25 @@ void my_mqtt_publish(mqtt_client_t *client, const char *t, const char *m)
       snprintf(s, sizeof(s), "MQTT queued %s=%s", t, m);
       log_put(s);
   }
+  return err;
 }
 
 
 void my_mqtt_to_Queue(const char *t, const char *m){
 
-	osMutexAcquire(putMqttMutexHandle, osWaitForever);
-
-	osStatus_t status;
-	mqtt_msg__t mqtt_msg;
-
-	strcpy(mqtt_msg.topic, t);
-	strcpy(mqtt_msg.value, m);
-
-	status = osMessageQueuePut(QueueTxMqttHandle, &mqtt_msg, 0U, 0U);
+	mqtt_msg__t mqtt_msg = {0};
+	size_t topic_len = strlen(t);
+	size_t value_len = strlen(m);
+	if (topic_len >= sizeof(mqtt_msg.topic) || value_len >= sizeof(mqtt_msg.value)) {
+		log_put("MQTT CAN report too long");
+		return;
+	}
+	memcpy(mqtt_msg.topic, t, topic_len + 1U);
+	memcpy(mqtt_msg.value, m, value_len + 1U);
+	osStatus_t status = osMessageQueuePut(QueueTxMqttHandle, &mqtt_msg, 0U, 0U);
 	if (status != osOK) {
 		 char s[LOG_LEN];
 		 sprintf(s, "QPut mq er %d", status);
 		 log_put(s);
 	}
-	osMutexRelease(putMqttMutexHandle);
 }

@@ -7,7 +7,6 @@
 
 #include "my_mcu.h"
 #include "my_can.h"
-#include "my_mqtt.h"
 #include "my_log.h"
 #include "cmsis_os2.h"
 #include <string.h>
@@ -97,39 +96,7 @@ void Can_LogRx(const MsgQRxCan_t *msg_can) {
 
 
 void Can_RX(const MsgQRxCan_t *msg_can){
-
- char s[80];
-
-/*
-	 sprintf(s,"can_rx<%X %X %X %X %02X%02X%02X%02X%02X%02X%02X%02X",
-				     msg_can->RxHeader.IDE,
-						 msg_can->RxHeader.StdId,
-						 msg_can->RxHeader.RTR,
-						 msg_can->RxHeader.DLC,
-						 msg_can->RxData.to, msg_can->RxData.fun, msg_can->RxData.val, msg_can->RxData.valL,
-						 msg_can->RxData.xxx[0], msg_can->RxData.xxx[1], msg_can->RxData.xxx[2], msg_can->RxData.xxx[3]);
-		log_put(s);
-*/
-
-
-	if (my_mcu_send_can(msg_can))
-		return;
-
-	return; // nie publikujemy reszty
-
-	char t[TOPIC_LEN];
-//	char s[LOG_LEN];
-
-	sprintf(t,"reszta/ExtID=%lX", msg_can->RxHeader.ExtId);
-	sprintf(s,"%X %X %X %X %02X%02X%02X%02X%02X%02X%02X%02X",
-			     msg_can->RxHeader.IDE,
-					 msg_can->RxHeader.StdId,
-					 msg_can->RxHeader.RTR,
-					 msg_can->RxHeader.DLC,
-					 msg_can->RxData.to, msg_can->RxData.fun, msg_can->RxData.val, msg_can->RxData.valL,
-					 msg_can->RxData.xxx[0], msg_can->RxData.xxx[1], msg_can->RxData.xxx[2], msg_can->RxData.xxx[3]);
-	// deb
-	my_mqtt_to_Queue(t, s);
+	(void)my_mcu_send_can(msg_can);
 }
 
 
@@ -156,8 +123,8 @@ void my_can_Tx(const MsgQTxCan_t *msg){
 						 msgR->TxHeader.RTR,
 						 msgR->TxHeader.DLC,
 
-						 msgR->TxData.fun,
 						 msgR->TxData.to,
+						 msgR->TxData.fun,
 						 msgR->TxData.val,
 						 msgR->TxData.valL);
   log_put(s);

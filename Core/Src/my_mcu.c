@@ -72,23 +72,18 @@ uint8_t my_mcu_send_can(const MsgQRxCan_t *msg_can){ //oodbiór z mcu (can) i wy
 	char t[TOPIC_LEN] = "dscan/";
 	char s[LOG_LEN];
 
-	 if (msg_can->RxHeader.ExtId)
-	   return 0;
-
- sprintf(s,"can_rx<%X %X %X %X %02X%02X%02X%02X%02X%02X%02X%02X",
-	  				     msg_can->RxHeader.IDE,
-	  						 msg_can->RxHeader.StdId,
-	  						 msg_can->RxHeader.RTR,
-	  						 msg_can->RxHeader.DLC,
-	  						 msg_can->RxData.to, msg_can->RxData.fun, msg_can->RxData.val, msg_can->RxData.valL,
-	  						 msg_can->RxData.xxx[0], msg_can->RxData.xxx[1], msg_can->RxData.xxx[2], msg_can->RxData.xxx[3]);
- 	log_put(s);
-
-
-
-	//uint32_t id_device = msg_can->RxHeader.StdId - 0x100;
-  if (msg_can->RxData.to == 0)
-	   return 0;
+	if (msg_can->RxHeader.IDE != CAN_ID_STD ||
+	    msg_can->RxHeader.RTR != CAN_RTR_DATA ||
+	    msg_can->RxHeader.DLC < 3U || msg_can->RxHeader.DLC > 8U ||
+	    msg_can->RxData.to == 0U ||
+	    msg_can->RxHeader.StdId != 0x100U + msg_can->RxData.to) {
+		return 0;
+	}
+	if ((msg_can->RxData.fun == CAN_FUN_SEN_PRAD || msg_can->RxData.fun == 0U) &&
+	    msg_can->RxHeader.DLC < 4U) {
+		log_put("CAN RX: missing low byte of measurement");
+		return 0;
+	}
 
 
 	uint8_t id = msg_can->RxData.to;
@@ -162,97 +157,84 @@ uint8_t my_mcu_send_can(const MsgQRxCan_t *msg_can){ //oodbiór z mcu (can) i wy
   	return 1;
   }
 
-	sprintf(s,"to:%d fun:%d val:%d val2:%d", msg_can->RxData.to, msg_can->RxData.fun, msg_can->RxData.val, msg_can->RxData.valL);
-	sprintf(t,"dscan/reszta/StdId=%d", msg_can->RxHeader.StdId);
+	snprintf(s, sizeof(s), "to:%d fun:%d val:%d val2:%u",
+	         msg_can->RxData.to, msg_can->RxData.fun, msg_can->RxData.val,
+	         msg_can->RxHeader.DLC >= 4U ? msg_can->RxData.valL : 0U);
+	snprintf(t, sizeof(t), "dscan/reszta/StdId=%lu",
+	         (unsigned long)msg_can->RxHeader.StdId);
 
 	my_mqtt_to_Queue(t, s);
 	return 1;
-
-
-	return 0;
 }
 
-MsgQTxCan_t msg_TxCan;
-
-void  my_mcu_recive_mqtt_topic(const char *topic){ //oodbiór z mqtt i przesłanie do MCU (can)
-	char *pid;
-	char sid[10];
-
-
-	memset(&msg_TxCan, 0, sizeof(msg_TxCan));
-
-	if (strstr(topic, "/set") == NULL)
-		return;
-
-	pid = topic + strlen(topic_can)+1;
-
-	u8_t l = 0;
-
-	while ((*(pid+l) >= '0' && *(pid+l) <= '9'))
-		l++;
-
-	strncpy(sid, pid, l);
-
-	msg_TxCan.TxHeader.StdId = 0x100 + atoi(sid);
-
-	if (strstr(topic, topic_roleta_pos)) {
-		msg_TxCan.TxData.fun = CAN_FUN_ROLETA_POZ;
-		return;
-	}
-	if (strstr(topic, topic_roleta)) {
-		msg_TxCan.TxData.fun = CAN_FUN_ROLETA;
-		return;
-	}
-	if (strstr(topic, topic_switch1)) {
-		msg_TxCan.TxData.fun = CAN_FUN_SWITCH1;
-		return;
-	}
-	if (strstr(topic, topic_switch2)) {
-		msg_TxCan.TxData.fun = CAN_FUN_SWITCH2;
-		return;
-	}
-	if (strstr(topic, topic_sensor1)) {
-		msg_TxCan.TxData.fun = CAN_FUN_SEN_BIN_1;
-		return;
-	}
-	if (strstr(topic, topic_sensor2)) {
-		msg_TxCan.TxData.fun = CAN_FUN_SEN_BIN_2;
-		return;
+bool my_mcu_parse_mqtt_topic(const char *topic, MsgQTxCan_t *msg)
+{
+	static const struct {
+		const char *suffix;
+		uint8_t function;
+	} commands[] = {
+		{topic_roleta, CAN_FUN_ROLETA},
+		{topic_roleta_pos, CAN_FUN_ROLETA_POZ},
+		{topic_switch1, CAN_FUN_SWITCH1},
+		{topic_switch2, CAN_FUN_SWITCH2},
+		{topic_sensor1, CAN_FUN_SEN_BIN_1},
+		{topic_sensor2, CAN_FUN_SEN_BIN_2}
+	};
+	static const char prefix[] = topic_can "/";
+	if (strncmp(topic, prefix, sizeof(prefix) - 1U) != 0) {
+		return false;
 	}
 
+	const char *p = topic + sizeof(prefix) - 1U;
+	unsigned id = 0;
+	unsigned digits = 0;
+	while (digits < 3U && *p >= '0' && *p <= '9') {
+		id = 10U * id + (unsigned)(*p++ - '0');
+		digits++;
+	}
+	if (id == 0U || id > UINT8_MAX || strncmp(p, "/set", 4U) != 0) {
+		return false;
+	}
+	p += 4U;
+	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+		if (strcmp(p, commands[i].suffix) == 0) {
+			*msg = (MsgQTxCan_t){0};
+			msg->TxHeader.StdId = 0x100U + id;
+			msg->TxHeader.DLC = 3U;
+			msg->TxHeader.IDE = CAN_ID_STD;
+			msg->TxHeader.RTR = CAN_RTR_DATA;
+			msg->TxData.fun = commands[i].function;
+			return true;
+		}
+	}
+	return false;
 }
 
-
-void my_mcu_recive_mqtt_data(const u8_t *data, u16_t len){ //oodbiór z mqtt i przesłanie do MCU (can)
-
-	if (msg_TxCan.TxHeader.StdId == 0)
-		return;
-
-	char d[] = {0,0,0,0,0,0,0,0,0,0};
-	strncpy(d, data, len);
-
-	if (strcmp(d,"ON") == 0) {
-		msg_TxCan.TxData.val = 1;
-		goto next;
+bool my_mcu_send_mqtt_command(MsgQTxCan_t *msg, const u8_t *data, u16_t len)
+{
+	unsigned value = 0U;
+	if (len == 2U && memcmp(data, "ON", 2U) == 0) {
+		value = DATA_VAL_ON;
+	} else if (len == 3U && memcmp(data, "OFF", 3U) == 0) {
+		value = DATA_VAL_OFF;
+	} else if (len == 4U && memcmp(data, "STOP", 4U) == 0) {
+		value = DATA_VAL_STOP;
+	} else {
+		if (len == 0U || len > 3U) {
+			return false;
+		}
+		for (u16_t i = 0; i < len; i++) {
+			if (data[i] < '0' || data[i] > '9') {
+				return false;
+			}
+			value = 10U * value + (unsigned)(data[i] - '0');
+		}
+		if (value > UINT8_MAX) {
+			return false;
+		}
 	}
-	if (strcmp(d,"OFF") == 0) {
-		msg_TxCan.TxData.val = 0;
-		goto next;
-	}
-	if (strcmp(d,"STOP") == 0) {
-		msg_TxCan.TxData.val = 255;
-		goto next;
-	}
-
-	msg_TxCan.TxData.val = atoi(d);
-
-	next:
-
-	msg_TxCan.TxHeader.DLC = 3; // długość danych TxData/RxData
-	msg_TxCan.TxHeader.IDE = CAN_ID_STD;
-	msg_TxCan.TxHeader.RTR = CAN_RTR_DATA;
-	my_can_Tx_Queue(&msg_TxCan);
-
-	return;
+	msg->TxData.val = (uint8_t)value;
+	my_can_Tx_Queue(msg);
+	return true;
 }
 

@@ -10,7 +10,25 @@ Mapa pinów i interfejsów płytki znajduje się w [JZ-F407.MD](./JZ-F407.MD), o
 
 ## Stan implementacji
 
-OTA przez CAN nie jest jeszcze zaimplementowane. Pliki `JZ-F407-MQTT-CAN.ioc` i `.cproject` wskazują już STM32F407VETx. Skonfigurowano USART1/RS232, I2C2, CAN1 50 kbit/s oraz RMII zgodnie z mapą płytki. USB CDC jest wyłączone, a `printf` korzysta z USART1. Zachowane pliki F207 pozostają w katalogu wyłącznie do porównania i są wykluczone z kompilacji. Nadal nie jest to gotowy firmware: przed budowaniem lub wgrywaniem otwórz `.ioc` w STM32CubeMX z pakietem STM32CubeF4, zweryfikuj zegar HSE 25 MHz, sterownik DP83848 oraz jego adres PHY zgodny ze strapami płytki, a następnie wygeneruj kod. Po generowaniu przejrzyj cały diff, szczególnie zmiany w plikach aplikacji i zachowanie Ethernetu. Sekcje poniżej opisują odziedziczoną bazę kodu F207, a nie gotową specyfikację sprzętową nowej bramki.
+OTA przez CAN nie jest jeszcze zaimplementowane. Pliki `JZ-F407-MQTT-CAN.ioc` i `.cproject` wskazują STM32F407VETx. Skonfigurowano USART1/RS232, CAN1 50 kbit/s, SDIO 4-bit z DMA/FatFs oraz RMII zgodnie z mapą płytki. I2C2/OLED jest obecnie wyłączone; zachowane źródła I2C2 i SSD1306 nie są kompilowane. USB CDC jest wyłączone, a `printf` korzysta z USART1. Kod kompiluje się przez CMake, ale nie został jeszcze przetestowany na płytce. Przed wgrywaniem zweryfikuj zegar HSE 25 MHz, sterownik DP83848 i jego adres PHY zgodny ze strapami płytki. Przy każdej zmianie `.ioc` wygeneruj kod ponownie i przejrzyj cały diff, szczególnie zmiany w plikach aplikacji i obsłudze Ethernetu. Zachowane pliki F207 pozostają w katalogu wyłącznie do porównania i są wykluczone z kompilacji. Sekcje poniżej opisują odziedziczoną bazę kodu F207, a nie gotową specyfikację sprzętową nowej bramki.
+
+## Karta SD (JZ-F407)
+
+SDIO używa PC8–PC11 jako D0–D3, PC12 jako CLK, PD2 jako CMD oraz PD3 jako wykrywanie karty (stan niski oznacza kartę włożoną). Transfer wykorzystuje DMA2 Stream 3 i FatFs. Osobne zadanie czeka na kartę, montuje istniejący wolumin i obsługuje logi; nie wykonuje formatowania.
+
+Wpisy `log_put` trafiają do dziennych plików `logRRRRMMDD.txt` w katalogu głównym, np. `log20261116.txt`. Datę pliku oraz znacznik `RRRR-MM-DD GG:MM:SS` ustala się w chwili powstania wpisu według polskiego czasu CET/CEST. Wpisy oczekujące w kolejce zachowują swój dzień, również po północy lub korekcie NTP. Przed pierwszym ustawieniem RTC logi mają czas od uruchomienia i trafiają do `log_unsynced.txt`; nie są później przenoszone do pliku z datą.
+
+Pliki są tworzone, jeśli ich brakuje; istniejące są otwierane do dopisywania i nie są obcinane. Przy zmianie dnia zadanie zamyka poprzedni plik i otwiera plik odpowiadający kolejnemu wpisowi. FatFs ma włączone długie nazwy (`_USE_LFN=2`). Buforowana kolejka 32 wpisów i osobne zadanie niskiego priorytetu oddzielają zapis SD od zadań CAN/MQTT. Zmiany są synchronizowane na kartę mniej więcej co sekundę i przy zamknięciu pliku. Przy przepełnieniu kolejki informacja o liczbie pominiętych wpisów trafia do pliku, gdy kolejka się opróżni. Stare logi nie są automatycznie usuwane; zapis zakończy się błędem po zapełnieniu karty. Wyjmowanie karty podczas zapisu nie jest bezpieczne — przed wyjęciem wyłącz zasilanie.
+
+Test pliku pozostaje nieinwazyjny: jeśli `SDTEST.TXT` już istnieje, firmware odczytuje do 32 bajtów i go nie zmienia. Jeśli pliku nie ma, tworzy go wyłącznie w trybie `CREATE_NEW` i zapisuje krótki znacznik testowy. Błędy są zapisywane w logu; karta nie jest formatowana.
+
+## RTC i synchronizacja NTP (JZ-F407)
+
+RTC korzysta z LSE 32,768 kHz na PC14/PC15, formatu 24 h i zasilania VBAT z baterii. Kalendarz przechowuje UTC; przeliczenie na polski czas CET/CEST odbywa się przy odczycie, według obecnych reguł UE (ostatnia niedziela marca i października, 01:00 UTC). Po poprawnej synchronizacji znacznik w rejestrze backup pozwala zachować czas po restarcie i odłączeniu głównego zasilania, jeśli bateria i LSE działają. Przy braku poprawnego czasu używany jest jawnie czas działania od uruchomienia, a metadane FAT otrzymują datę zastępczą 1980-01-01.
+
+Po inicjalizacji sieci klient SNTP odpytuje serwery Cloudflare `162.159.200.1` i `162.159.200.123`, ponawia nieudane próby i synchronizuje czas co godzinę. Wymaga dostępu do Internetu przez skonfigurowaną bramę oraz ruchu UDP na port 123; połączenie z lokalnym MQTT nie oznacza dostępu do NTP. Brak odpowiedzi nie blokuje CAN/MQTT ani podtrzymywanego RTC. Akceptowany zakres czasu NTP to lata 2024–2099. Odpowiedzi są sprawdzane pod kątem adresu i portu serwera, ale SNTP nie zapewnia uwierzytelnienia czasu.
+
+Po każdej regeneracji CubeMX zachowaj sekcję `Check_RTC_BKUP` w `Core/Src/rtc.c`, konfigurację SNTP w sekcji użytkownika `LWIP/Target/lwipopts.h` oraz inicjalizację kolejki SD i mutexu RTC w sekcjach użytkownika `Core/Src/freertos.c`. RTC/NTP i zmiana dziennych plików wymagają jeszcze testu na płytce, w tym odłączenia głównego zasilania i ponownego startu bez sieci.
 
 ## Bieżąca baza kodu: NUCLEO F207 MQTT CAN
 
@@ -57,21 +75,36 @@ Przed uruchomieniem sprawdź, czy adres urządzenia nie jest zajęty i czy broke
 - LED1 / PE13 zmienia stan co sekundę jako bicie serca głównego zadania.
   Miganie nie potwierdza stanu Ethernetu ani HTTP.
 - LED2 / PE14 i LED3 / PE15 są sterowane wyłącznie przez formularz WWW.
-  Pierwsze pole (`led=1`) steruje LED3, drugie (`led=2`) LED2.
+  Pierwsze pole (`led=1`) steruje LED3, drugie (`led=2`) LED2. LED3 jest też
+  przełączana przez test CAN po naciśnięciu przycisku S3.
   Zaznaczenie pola i wysłanie formularza zapala diodę, odznaczenie gasi.
 - Zgodnie ze schematem płytki diody są aktywne stanem niskim:
   `GPIO_PIN_RESET` zapala, a `GPIO_PIN_SET` gasi.
 
 Tymczasowa diagnostyka nasłuchu/łącza/SSI diodami została usunięta.
-LCD i zadanie przycisku pozostają wyłączone.
+LCD pozostaje wyłączony. Zadanie przycisku obsługuje S3 (PE12) z eliminacją
+drgań styków; naciśnięcie przełącza LED3 (PE15) i kolejkuje pojedynczą ramkę
+testową CAN.
 
-### CAN — etap 1: odbiór i logi
+### CAN — odbiór, diagnostyka i most MQTT
 
 CAN1 działa w trybie normalnym przy 50 kbit/s, na PD0 (RX) i PD1 (TX).
-Potwierdza odbiór ramek przez ACK, ale aplikacja nie wysyła ramek ani poleceń.
+Potwierdza odbiór ramek przez ACK. Nadawanie obejmuje polecenia przychodzące
+z MQTT oraz ramkę testową z S3.
 Filtr przyjmuje wszystkie identyfikatory do FIFO0. Callback odbioru przekazuje
 ramkę do kolejki; logowanie odbywa się w zadaniu CAN, nie w przerwaniu.
-Nie są wywoływane odziedziczone funkcje przekazujące CAN do MQTT.
+Do MQTT trafiają prawidłowe ramki danych zgodne z protokołem sterownika.
+
+Po naciśnięciu S3 firmware wysyła standardową ramkę z ID `0x108`, `DLC=3`
+i danymi `00 64 00`: zapytanie o identyfikator DS-MCU-CAN o ID `8`.
+Wartość `0` nie zmienia ID ani nie uruchamia wyjść. OLED DS-MCU powinien pokazać
+`C108 F100 00:00` poprzedzone czasem od uruchomienia. Log JZ pokazuje
+`can_tx>0 0 108 0 3 00640000`; ostatni bajt jest tylko częścią logu, nie ramki.
+Odziedziczony kod DS-MCU odpowiada funkcją `1` i wartością swojego ID (`8`),
+a nie kodem `100`, więc odpowiedzi nie należy traktować jako stanu rolety.
+Na magistrali 50 kbit/s pojedyncza ramka powinna być widoczna na oscyloskopie.
+Jeśli nie ma innego aktywnego węzła, możliwy jest błąd ACK — sprawdź wtedy
+przebieg różnicowy CANH–CANL oraz status błędów CAN.
 
 Log WWW/USART1 zawiera wyniki konfiguracji filtra, startu i włączenia przerwań,
 a następnie odebrane ramki, np. `CAN RX S:00000108 DATA L=4 08150001`.
@@ -113,7 +146,7 @@ etapowo, zgodnie z opisami w tym dokumencie.
 Konfiguracja projektu wskazuje F407, ale wygenerowany kod nie został jeszcze zweryfikowany. Nie wgrywaj dotychczasowych artefaktów z katalogu `Debug` na płytkę F407.
 
 1. Otwórz `JZ-F407-MQTT-CAN.ioc` w STM32CubeMX i sprawdź, czy wybrany układ to STM32F407VET6.
-2. Sprawdź mapę pinów i zegary: I2C2 musi używać PF0 (SDA) i PF1 (SCL), USART1 PA9/PA10, a źródłem PLL dla 168 MHz ma być HSE 25 MHz. Dla RMII potwierdź zgodność wygenerowanej obsługi PHY z DP83848 na płytce; nie zakładaj, że sterownik LAN8742 z bazy F207 jest zgodny.
+2. Sprawdź mapę pinów i zegary: USART1 używa PA9/PA10, a źródłem PLL dla 168 MHz ma być HSE 25 MHz. I2C2/OLED pozostaje wyłączone; przy jego ponownym włączeniu użyj PF0 (SDA) i PF1 (SCL). Dla RMII potwierdź zgodność wygenerowanej obsługi PHY z DP83848 na płytce; nie zakładaj, że sterownik LAN8742 z bazy F207 jest zgodny.
 3. Wygeneruj kod do katalogu projektu. Zachowaj istniejący kod aplikacji i przejrzyj cały diff, zwłaszcza pliki zawierające bloki `USER CODE`. Potwierdź, że powstał `Core/Startup/startup_stm32f407vetx.s`; zachowany plik startowy F207 nie może być użyty.
 4. W **Project Manager → Toolchain / IDE** wybierz **CMake** oraz kompilator **GCC**, po czym wygeneruj kod. CubeMX utworzy `CMakeLists.txt`, `mx-generated.cmake` oraz `gcc-arm-none-eabi.cmake` w katalogu projektu.
 5. Otwórz katalog projektu w VS Code, zainstaluj rekomendowane rozszerzenia, wybierz preset `debug` i wykonaj **CMake: Configure** oraz **CMake: Build**. Wymagane są STM32CubeCLT z CMake, Ninja i `arm-none-eabi-gcc` dostępnymi w `PATH`.
@@ -161,18 +194,35 @@ uruchamiaj z katalogu projektu; błędy kończą skrypt kodem różnym od zera.
   niepowodzenie kontroli. Puste mailboxy nie dowodzą braku wcześniejszego TX,
   a ten skrypt nie zastępuje testu odbioru CAN z rzeczywistym nadajnikiem.
 
+- [`test_rtc_daily.py`](./pyAI/test_rtc_daily.py) kompiluje i uruchamia na komputerze
+  rzeczywisty kod RTC/NTP, kolejki logów i zadania zapisującego pliki, zastępując
+  sprzęt oraz FatFs atrapami. Sprawdza granice CET/CEST, rok przestępny, zmianę roku,
+  zachowanie ustawionego kalendarza przy inicjalizacji, odrzucanie błędnego czasu NTP,
+  błędy RTC, zakończenie długich wpisów znakiem nowej linii oraz dopisywanie do
+  właściwych dziennych plików po zmianie daty i jej korekcie wstecz.
+  Wymaga Windows i kompilatora MSVC C/C++ z Visual Studio lub Build Tools.
+  Instalację wykrywa przez `vswhere`; opcja `--vcvars` pozwala wskazać ją jawnie.
+  Nie łączy się z płytką ani Internetem i nie wgrywa firmware.
+  Pliki kompilacji powstają w katalogu tymczasowym i są automatycznie usuwane.
+  Ten test nie potwierdza fizycznego podtrzymania RTC, działania NTP ani zapisu na SD.
+
+  ```powershell
+  python .\pyAI\test_rtc_daily.py
+  python .\pyAI\test_rtc_daily.py --vcvars "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+  ```
+
 ## MQTT
 
-### Etapy 1–2: połączenie i testowa publikacja
+### Połączenie i publikacja
 
 Zadanie MQTT jest włączone. Łączy się z `192.168.1.2:1883` jako
 `dscan-jz-f407`, bez używania identyfikatora `stm32` starej instalacji.
 Publikuje czas działania w sekundach pod `DataSoft/dscan/uptime`,
 po połączeniu i następnie co 10 sekund, z QoS 0 i bez retained.
-Nie subskrybuje żadnych tematów i nie przekazuje poleceń ani danych CAN.
-`MQTT_CAN_COMMANDS_ENABLED=0` wyłącza odziedziczone callbacki poleceń.
+Po każdym połączeniu subskrybuje `DataSoft/dscan/+/set/+` z QoS 1.
+Poleceń sterujących nie publikuj z flagą retained: broker mógłby wysłać je ponownie po reconnect.
 
-Zadanie co sekundę zleca krótką obsługę przez `tcpip_callback`; tworzenie
+Zadanie co około 100 ms zleca krótką obsługę przez `tcpip_callback`; tworzenie
 klienta, połączenie i publikacja odbywają się wyłącznie w wątku TCP/IP.
 Zadanie MQTT używa statycznego stosu i bloku kontrolnego, aby oszczędzać
 pamięć alokowaną dynamicznie. Projekt używa `heap_3` (alokatora newlib);
@@ -184,11 +234,11 @@ stanowi potwierdzenia odbioru przez aplikację odbiorcy. Po rozłączeniu lub
 błędzie próba połączenia jest ponawiana po 10 sekundach; keep-alive wynosi
 30 sekund. Działające WWW i heartbeat LED1 pozostają niezależne od brokera.
 
-### Przyszłe przekazywanie CAN↔MQTT
+### Przekazywanie CAN↔MQTT
 
 Przestrzeń tematów została zmieniona z używanego przez starą instalację
-`DataSoft/can` na `DataSoft/dscan`. Poniższe mapowania są zachowane w kodzie
-na następny etap, ale obecnie przekazywanie CAN↔MQTT jest wyłączone.
+`DataSoft/can` na `DataSoft/dscan`. Komendy trafiają do kolejki nadawczej CAN,
+a raporty CAN są publikowane z kolejki MQTT w wątku TCP/IP.
 
 ### Dane z CAN
 
@@ -214,7 +264,7 @@ Temat:   DataSoft/dscan/1/set/roleta
 Payload: ON
 ```
 
-Obsługiwane końcówki poleceń to `roleta`, `roleta_pos`, `switch1`, `switch2`, `sensor1` i `sensor2`. Dla rolety akceptowane są wartości `ON`, `OFF` i `STOP`; pozostałe wartości są interpretowane jako liczby. Polecenie jest wysyłane standardową ramką CAN o identyfikatorze `0x100 + <ID>`.
+Obsługiwane końcówki poleceń to `roleta`, `roleta_pos`, `switch1`, `switch2`, `sensor1` i `sensor2`. Akceptowane są `ON`, `OFF`, `STOP` oraz liczby dziesiętne `0`–`255`. `<ID>` musi być w zakresie `1`–`255`. Polecenie jest wysyłane standardową ramką CAN o identyfikatorze `0x100 + <ID>`. Przekazanie `STOP` nie oznacza, że dany sterownik je obsługuje: obecny DS-MCU-CAN w trybie rolety manualnej traktuje wartość `255` jako zamykanie.
 
 ### Struktura ramki CAN
 

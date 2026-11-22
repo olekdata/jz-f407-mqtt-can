@@ -8,8 +8,16 @@
 #ifndef INC_MY_LOG_H_
 #define INC_MY_LOG_H_
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #define LOG_MAX 50
 #define LOG_LEN 70
+
+typedef struct {
+	uint32_t date;
+	char line[LOG_LEN];
+} LogSDEntry;
 
 #ifndef MIN
 #define MIN(a,b) (((a)<(b))?(a):(b))
@@ -35,5 +43,8 @@ int ILinia(int lp);
 void log_put(const char *s);
 void log_get(int lp, char *destination, size_t size);
 void set_stime();
+bool log_sd_queue_init(void);
+bool log_sd_queue_get(LogSDEntry *entry, uint32_t timeout_ms);
+uint32_t log_sd_queue_dropped(void);
 
 #endif /* INC_MY_LOG_H_ */
